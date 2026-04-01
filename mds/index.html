@@ -314,6 +314,77 @@ body::after{
   100%{transform:scale(1);opacity:1}
 }
 
+/* Dice roll animation */
+.dice-scene{
+  perspective:800px;
+  display:flex;justify-content:center;align-items:center;
+  padding:20px 0 12px;
+}
+.dice-container{
+  width:70px;height:70px;position:relative;
+  transform-style:preserve-3d;
+}
+.dice-container--rolling{
+  animation:diceRoll 2s cubic-bezier(.3,0,.2,1) infinite;
+}
+.dice-container--result{
+  animation:diceSettle .6s cubic-bezier(.2,.8,.3,1) forwards;
+}
+@keyframes diceRoll{
+  0%{transform:rotateX(0deg) rotateY(0deg) rotateZ(0deg)}
+  25%{transform:rotateX(270deg) rotateY(180deg) rotateZ(90deg)}
+  50%{transform:rotateX(540deg) rotateY(90deg) rotateZ(270deg)}
+  75%{transform:rotateX(810deg) rotateY(360deg) rotateZ(180deg)}
+  100%{transform:rotateX(1080deg) rotateY(720deg) rotateZ(360deg)}
+}
+@keyframes diceSettle{
+  0%{transform:rotateX(360deg) rotateY(180deg) scale(.7)}
+  70%{transform:rotateX(0deg) rotateY(0deg) scale(1.1)}
+  100%{transform:rotateX(0deg) rotateY(0deg) scale(1)}
+}
+.dice-face{
+  position:absolute;width:70px;height:70px;
+  border-radius:12px;
+  display:flex;align-items:center;justify-content:center;
+  font-family:var(--serif);font-weight:900;font-size:28px;
+  backface-visibility:hidden;
+  background:linear-gradient(145deg,#f5f0e8,#e8e0d0);
+  border:2px solid #ccc4b4;
+  color:#1a1a1a;
+  box-shadow:inset 0 2px 4px rgba(255,255,255,.6),inset 0 -2px 4px rgba(0,0,0,.1);
+}
+.dice-face--1{transform:translateZ(35px)}
+.dice-face--2{transform:rotateY(90deg) translateZ(35px)}
+.dice-face--3{transform:rotateY(180deg) translateZ(35px)}
+.dice-face--4{transform:rotateY(-90deg) translateZ(35px)}
+.dice-face--5{transform:rotateX(90deg) translateZ(35px)}
+.dice-face--6{transform:rotateX(-90deg) translateZ(35px)}
+
+/* Dice pips using radial dots */
+.dice-pips{
+  width:48px;height:48px;
+  display:grid;grid-template:repeat(3,1fr)/repeat(3,1fr);
+  gap:2px;padding:2px;
+}
+.dice-pips .pip{
+  width:10px;height:10px;border-radius:50%;
+  background:#c0392b;
+  box-shadow:inset 0 1px 2px rgba(0,0,0,.3);
+  align-self:center;justify-self:center;
+}
+.dice-pips .pip--hide{visibility:hidden}
+
+/* Dice result overlay */
+.dice-result{
+  position:absolute;inset:-6px;border-radius:16px;
+  display:flex;align-items:center;justify-content:center;
+  text-align:center;
+  font-family:var(--sans);font-size:11px;font-weight:800;
+  text-transform:uppercase;letter-spacing:.5px;
+  line-height:1.2;
+  animation:resultPop .5s cubic-bezier(.2,.8,.3,1) forwards;
+}
+
 /* TX ID display */
 .txid-row{
   margin-top:8px;display:flex;align-items:center;gap:6px;
@@ -385,7 +456,7 @@ body::after{
 
 <script>
 /* ============================================
-   UNIVERSAL CASINO v1.1.2
+   UNIVERSAL CASINO v1.1.3
    3-phase commit-reveal: create → take → reveal → resolve
    Fair odds — neither party can compute outcome early
    ============================================ */
@@ -528,6 +599,34 @@ function coinAnimHTML(spinning) {
         '</div></div>';
 }
 
+function dicePipsHTML(n) {
+    // Grid positions for pip layouts: [TL,TC,TR, ML,MC,MR, BL,BC,BR]
+    var layouts = {
+        1:[0,0,0, 0,1,0, 0,0,0], 2:[0,0,1, 0,0,0, 1,0,0], 3:[0,0,1, 0,1,0, 1,0,0],
+        4:[1,0,1, 0,0,0, 1,0,1], 5:[1,0,1, 0,1,0, 1,0,1], 6:[1,0,1, 1,0,1, 1,0,1]
+    };
+    var pips = layouts[n] || layouts[1];
+    var h = '<div class="dice-pips">';
+    for (var i = 0; i < 9; i++) h += '<span class="pip' + (pips[i] ? '' : ' pip--hide') + '"></span>';
+    return h + '</div>';
+}
+
+function diceAnimHTML(rolling) {
+    var h = '<div class="dice-scene"><div class="dice-container' + (rolling ? ' dice-container--rolling' : '') + '">';
+    for (var f = 1; f <= 6; f++) h += '<div class="dice-face dice-face--' + f + '">' + dicePipsHTML(f) + '</div>';
+    return h + '</div></div>';
+}
+
+function diceResultHTML(playerWins, isHouse) {
+    var won = (playerWins && !isHouse) || (!playerWins && isHouse);
+    var label = won ? 'YOU<br>WIN' : 'YOU<br>LOSE';
+    var cls = won ? 'coin-result--win' : 'coin-result--lose';
+    return '<div class="dice-scene"><div class="dice-container dice-container--result">' +
+        '<div class="dice-face dice-face--1" style="opacity:0"></div>' +
+        '<div class="dice-result ' + cls + '">' + label + '</div>' +
+        '</div></div>';
+}
+
 function coinResultHTML(playerWins, isHouse) {
     var won = (playerWins && !isHouse) || (!playerWins && isHouse);
     var label = won ? 'YOU<br>WIN' : 'YOU<br>LOSE';
@@ -648,7 +747,7 @@ function loadWalletKeys(callback) {
 function finishInit() {
     loadWalletKeys(function() {
         DB_READY = true;
-        MDS.log("Casino v1.1.2 ready. Script=" + SCRIPT_ADDR + " Pub=" + MY_PUBKEY.substring(0,16) + "... Keys=" + Object.keys(MY_KEYS).length);
+        MDS.log("Casino v1.1.3 ready. Script=" + SCRIPT_ADDR + " Pub=" + MY_PUBKEY.substring(0,16) + "... Keys=" + Object.keys(MY_KEYS).length);
         refreshBets(); refreshBalance();
         updateSummary();
     });
@@ -821,10 +920,9 @@ function renderMyBets() {
             html += '<div class="card-row"><span class="info">Timeout: <b>' + (left > 0 ? left + ' blocks' : 'EXPIRED') + '</b></span></div>';
         }
 
-        // Coin flip animation for phases 1-2
-        if (range == 2 && phase >= 1) {
-            html += coinAnimHTML(true);
-        }
+        // Game animation for phases 1-2
+        if (range == 2 && phase >= 1) html += coinAnimHTML(true);
+        if (range == 6 && phase >= 1) html += diceAnimHTML(true);
 
         html += '<div class="divider"></div>';
         html += '<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">';
@@ -842,7 +940,6 @@ function renderMyBets() {
         }
         if (phase === 2 && isPlayer) {
             html += '<span class="info" style="color:var(--green)">Resolving result...</span>';
-            html += '<button class="btn btn--green btn--sm" onclick="doPlayerResolve(\'' + safeCoinId + '\',\'' + statusId + '\',this)">Resolve Now</button>';
         }
         if (phase === 2 && isHouse) {
             html += '<span class="info" style="color:var(--text-dim)">Waiting for player to resolve...</span>';
@@ -864,6 +961,7 @@ function renderMyBets() {
         html += '<div class="card-row"><span class="info">Role: <b>' + rb.role + '</b></span><span class="info" style="color:' + (won ? 'var(--green)' : 'var(--red)') + ';font-weight:800">' + (won ? '+' + rb.winnings : '-' + rb.bet) + ' Minima</span></div>';
         html += '<div class="card-row"><span class="info">Pick: <b>' + rb.pickLabel + '</b> | Result: <b>' + rb.resultLabel + '</b></span></div>';
         if (rb.range == 2) html += coinResultHTML(rb.playerWins, rb.role === 'House');
+        if (rb.range == 6) html += diceResultHTML(rb.playerWins, rb.role === 'House');
         if (rb.txid) html += txidRowHTML(rb.txid);
         html += '</div>';
     });
