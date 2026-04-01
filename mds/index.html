@@ -537,7 +537,7 @@ body::after{
 
 <script>
 /* ============================================
-   UNIVERSAL CASINO v1.1.7
+   UNIVERSAL CASINO v1.1.8
    3-phase commit-reveal: create → take → reveal → resolve
    Fair odds — neither party can compute outcome early
    ============================================ */
@@ -564,8 +564,8 @@ var PENDING_TXS = {};
 var AUTO_BUSY = {};
 var TAKING = {};  // coinid → true while take is in flight (prevents double-take)
 var PREV_BETS = [];  // snapshot of BETS from last refresh, for detecting disappeared coins
-var PREV_BALANCE = 0;  // sendable balance before last refresh
-var RESOLVED_BETS = [];  // {coinid, role, game, pick, result, playerWins, winnings, amount, txid, time}
+var PENDING_RESULTS = [];  // disappeared coins awaiting balance confirmation {coinid, houseaddr, bet, payout, range, game, amount, time}
+var RESOLVED_BETS = [];  // {coinid, role, game, range, pickLabel, resultLabel, profit, won, bet, amount, txid, time}
 
 function saveHistory() {
     MDS.keypair.set("casino_history", JSON.stringify(RESOLVED_BETS.slice(0, 50)));
@@ -635,6 +635,63 @@ function clearPendingStatus() {
         els[i].className = "bet-status bet-status--ok"; els[i].innerText = "Confirmed!";
         (function(el) { setTimeout(function() { el.innerText = ""; el.className = "bet-status"; }, 4000); })(els[i]);
     }
+}
+
+// Resolve pending results on NEWBALANCE — check if coins arrived at our address
+function resolvePendingResults() {
+    if (PENDING_RESULTS.length === 0) return;
+    MDS.cmd("coins relevant:true sendable:true tokenid:0x00", function(res) {
+        if (!res.status || !res.response) return;
+        var toRemove = [];
+        PENDING_RESULTS.forEach(function(pr, idx) {
+            // Timeout: if pending for > 60 seconds, just record as unknown
+            var age = Date.now() - pr.time;
+            if (age < 3000) return; // wait at least 3 seconds for confirmation
+            var alreadyRecorded = RESOLVED_BETS.some(function(rb) { return rb.coinid === pr.coinid; });
+            if (alreadyRecorded) { toRemove.push(idx); return; }
+            // For house: check if we received a coin ≈ pot amount (house won) or not (house lost)
+            // For player: just record as resolved (doPlayerResolve should have handled this)
+            var iWon = false;
+            var profit;
+            if (pr.role === 'House') {
+                // House wins: gets full pot (stake + player bet) = bet * payout
+                // House loses: gets nothing for fair odds
+                // Check if any recent coin ≈ pot amount exists
+                var potAmt = parseFloat(pr.amount);
+                var foundPot = res.response.some(function(c) {
+                    return Math.abs(parseFloat(c.amount) - potAmt) < 0.001;
+                });
+                iWon = foundPot;
+                profit = iWon ? parseFloat(pr.bet) : miniNum(parseFloat(pr.bet) * (pr.payout - 1));
+            } else {
+                // Player fallback — if we got paid, we won
+                var winAmt = miniNum(parseFloat(pr.bet) * pr.payout);
+                var foundWin = res.response.some(function(c) {
+                    return Math.abs(parseFloat(c.amount) - winAmt) < 0.001;
+                });
+                iWon = foundWin;
+                profit = iWon ? miniNum(winAmt - parseFloat(pr.bet)) : parseFloat(pr.bet);
+            }
+            RESOLVED_BETS.unshift({
+                coinid: pr.coinid, role: pr.role,
+                game: pr.game, range: pr.range,
+                pickLabel: '\u2014', resultLabel: '\u2014',
+                profit: profit, won: iWon,
+                bet: pr.bet, amount: pr.amount, txid: pr.coinid,
+                time: pr.time
+            });
+            if (RESOLVED_BETS.length > 50) RESOLVED_BETS.pop();
+            saveHistory();
+            // flashResult expects (playerWins, isHouse, ...) — derive playerWins from iWon + role
+            var playerWins = (pr.role === 'Player') ? iWon : !iWon;
+            flashResult(playerWins, pr.role === 'House', pr.game, profit, pr.range, -1, -1);
+            MDS.log("RESOLVED PENDING: " + pr.role + " " + pr.game + " won=" + iWon + " profit=" + profit);
+            toRemove.push(idx);
+        });
+        // Remove resolved entries (reverse order to preserve indices)
+        toRemove.sort(function(a,b) { return b - a; }).forEach(function(i) { PENDING_RESULTS.splice(i, 1); });
+        if (toRemove.length > 0) renderHistory();
+    });
 }
 
 function extractResponse(res) {
@@ -714,16 +771,6 @@ function diceAnimHTML(rolling) {
     return h + '</div></div>';
 }
 
-function diceResultHTML(playerWins, isHouse) {
-    var won = (playerWins && !isHouse) || (!playerWins && isHouse);
-    var label = won ? 'YOU<br>WIN' : 'YOU<br>LOSE';
-    var cls = won ? 'coin-result--win' : 'coin-result--lose';
-    return '<div class="dice-scene"><div class="dice-container dice-container--result">' +
-        '<div class="dice-face dice-face--1" style="opacity:0"></div>' +
-        '<div class="dice-result ' + cls + '">' + label + '</div>' +
-        '</div></div>';
-}
-
 function rouletteAnimHTML(spinning) {
     return '<div class="roulette-scene"><div style="position:relative;display:inline-block">' +
         '<div class="roulette-marker"></div>' +
@@ -731,27 +778,6 @@ function rouletteAnimHTML(spinning) {
         '<div class="roulette-inner"></div>' +
         '<div class="roulette-center">\u25C9</div>' +
         '</div></div></div>';
-}
-
-function rouletteResultHTML(playerWins, isHouse) {
-    var won = (playerWins && !isHouse) || (!playerWins && isHouse);
-    var label = won ? 'YOU<br>WIN' : 'YOU<br>LOSE';
-    var cls = won ? 'coin-result--win' : 'coin-result--lose';
-    return '<div class="roulette-scene"><div style="position:relative;display:inline-block">' +
-        '<div class="roulette-wheel roulette-wheel--result">' +
-        '<div class="roulette-inner"></div>' +
-        '<div class="roulette-result ' + cls + '">' + label + '</div>' +
-        '</div></div></div>';
-}
-
-function coinResultHTML(playerWins, isHouse) {
-    var won = (playerWins && !isHouse) || (!playerWins && isHouse);
-    var label = won ? 'YOU<br>WIN' : 'YOU<br>LOSE';
-    var cls = won ? 'coin-result--win' : 'coin-result--lose';
-    return '<div class="coin-scene"><div class="coin-container coin-container--result">' +
-        '<div class="coin-face coin-front" style="opacity:0"></div>' +
-        '<div class="coin-result ' + cls + '">' + label + '</div>' +
-        '</div></div>';
 }
 
 function txidRowHTML(txid) {
@@ -791,7 +817,7 @@ MDS.init(function(msg) {
         if (Object.keys(PENDING_TXS).length > 0) checkPendingComplete();
     }
     if (msg.event === "NEWBALANCE") {
-        if (DB_READY) { refreshBets(); refreshBalance(); clearPendingStatus(); }
+        if (DB_READY) { refreshBets(); refreshBalance(); clearPendingStatus(); resolvePendingResults(); }
     }
 });
 
@@ -874,7 +900,7 @@ function finishInit() {
     loadWalletKeys(function() {
         loadHistory(function() {
             DB_READY = true;
-            MDS.log("Casino v1.1.7 ready. Script=" + SCRIPT_ADDR + " Pub=" + MY_PUBKEY.substring(0,16) + "... Keys=" + Object.keys(MY_KEYS).length);
+            MDS.log("Casino v1.1.8 ready. Script=" + SCRIPT_ADDR + " Pub=" + MY_PUBKEY.substring(0,16) + "... Keys=" + Object.keys(MY_KEYS).length);
             refreshBets(); refreshBalance();
             updateSummary();
         });
@@ -953,10 +979,7 @@ function updateBlock(msg) {
 function refreshBalance() {
     MDS.cmd("balance", function(res) {
         if (res.status && res.response && res.response.length > 0) {
-            var sendable = parseFloat(res.response[0].sendable);
-            var unconfirmed = parseFloat(res.response[0].unconfirmed);
-            PREV_BALANCE = sendable + unconfirmed;
-            document.getElementById("balanceDisplay").innerText = sendable.toFixed(2) + " Minima";
+            document.getElementById("balanceDisplay").innerText = parseFloat(res.response[0].sendable).toFixed(2) + " Minima";
         }
     });
 }
@@ -965,48 +988,49 @@ function refreshBets() {
     if (!SCRIPT_ADDR) return;
     MDS.cmd("coins address:" + SCRIPT_ADDR, function(res) {
         var newBets = (res.status && res.response) ? res.response : [];
-        // Detect disappeared phase-2 coins where we're the house (player resolved without us knowing)
+        // Detect disappeared coins that we were involved in
         if (PREV_BETS.length > 0) {
             var newIds = {};
             newBets.forEach(function(c) { newIds[c.coinid] = true; });
             PREV_BETS.forEach(function(old) {
-                if (newIds[old.coinid]) return;  // still exists
+                if (newIds[old.coinid]) return;
                 var phase = parseInt(getState(old, 6)) || 0;
-                if (phase !== 2) return;  // only care about resolved phase-2 coins
-                if (!isMyKey(getState(old, 0))) return;  // only house side
-                // This was a phase-2 coin where we're the house and it disappeared — player resolved it
-                var range = parseInt(getState(old, 3)) || 2;
-                var payout = parseInt(getState(old, 4)) || 2;
-                var bet = getState(old, 5) || "0";
-                var gt = gameType(range);
-                var totalAmt = parseFloat(old.amount);
-                // Check balance to infer win/loss: if balance went up, house won
-                MDS.cmd("balance", function(bres) {
-                    var newBal = 0;
-                    if (bres.status && bres.response && bres.response.length > 0) {
-                        newBal = parseFloat(bres.response[0].sendable) + parseFloat(bres.response[0].unconfirmed);
-                    }
-                    var balDelta = newBal - PREV_BALANCE;
-                    // House wins: gets full pot back. House loses: gets nothing (or remainder ≈ 0 for fair odds)
-                    var houseWon = balDelta > parseFloat(bet) * 0.5;
-                    var profit = houseWon ? parseFloat(bet) : miniNum(parseFloat(bet) * (payout - 1));
-                    var alreadyRecorded = RESOLVED_BETS.some(function(rb) { return rb.coinid === old.coinid; });
-                    if (!alreadyRecorded) {
-                        RESOLVED_BETS.unshift({
-                            coinid: old.coinid, role: 'House',
-                            game: gt.name, range: range,
-                            pickLabel: '—', resultLabel: '—',
-                            playerWins: !houseWon, winnings: miniNum(parseFloat(bet) * payout),
-                            profit: profit, won: houseWon,
-                            bet: bet, amount: totalAmt, txid: old.coinid,
-                            time: Date.now()
-                        });
-                        if (RESOLVED_BETS.length > 50) RESOLVED_BETS.pop();
-                        saveHistory();
-                        flashResult(!houseWon, true, gt.name, profit, range, -1, -1);
-                    }
-                    PREV_BALANCE = newBal;
-                });
+                var amHouse = isMyKey(getState(old, 0));
+                var amPlayer = isMyKey(getState(old, 8));
+                if (!amHouse && !amPlayer) return;
+                var alreadyRecorded = RESOLVED_BETS.some(function(rb) { return rb.coinid === old.coinid; });
+                if (alreadyRecorded) return;
+                // House: phase-2 coin disappeared = player resolved it (we don't know result yet)
+                if (phase === 2 && amHouse && !amPlayer) {
+                    var range = parseInt(getState(old, 3)) || 2;
+                    var payout = parseInt(getState(old, 4)) || 2;
+                    var bet = getState(old, 5) || "0";
+                    PENDING_RESULTS.push({
+                        coinid: old.coinid, role: 'House',
+                        range: range, payout: payout,
+                        bet: bet, amount: parseFloat(old.amount),
+                        game: gameType(range).name,
+                        balBefore: 0, // will be set on next NEWBALANCE
+                        time: Date.now()
+                    });
+                    MDS.log("PENDING RESULT: house bet disappeared " + old.coinid.substring(0,16));
+                }
+                // Player: phase-2 coin disappeared but doPlayerResolve didn't record it
+                // (e.g., auto-resolve ran but flash was missed). Record as fallback.
+                if (phase === 2 && amPlayer && !amHouse) {
+                    MDS.log("FALLBACK: player bet disappeared without resolve record " + old.coinid.substring(0,16));
+                    // We can't compute the result without running the hash again, so just mark unknown
+                    var rng = parseInt(getState(old, 3)) || 2;
+                    var bt = getState(old, 5) || "0";
+                    PENDING_RESULTS.push({
+                        coinid: old.coinid, role: 'Player',
+                        range: rng, payout: parseInt(getState(old, 4)) || 2,
+                        bet: bt, amount: parseFloat(old.amount),
+                        game: gameType(rng).name,
+                        balBefore: 0,
+                        time: Date.now()
+                    });
+                }
             });
         }
         PREV_BETS = newBets.map(function(c) {
@@ -1557,7 +1581,7 @@ function renderHistory() {
             html += '<br><span style="font-size:11px;color:var(--text-dim);font-weight:400">Picked: ' + esc(rb.pickLabel) + ' \u2192 Result: ' + esc(rb.resultLabel) + '</span>';
         }
         html += '</span>';
-        html += '<span style="font-family:var(--mono);font-size:13px;font-weight:800;color:' + color + '">' + sign + profit + '</span>';
+        html += '<span style="font-family:var(--mono);font-size:13px;font-weight:800;color:' + color + '">' + sign + esc(String(profit)) + '</span>';
         html += '</div>';
         if (rb.txid) {
             html += '<div style="padding:2px 12px 8px">';
