@@ -94,7 +94,7 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:15
   <header class="hdr">
     <div>
       <span class="hdr__title">Universal Casino</span>
-      <span class="hdr__sub">on-chain gambling</span>
+      <span class="hdr__sub">fair odds</span>
     </div>
     <span class="hdr__wallet" id="balanceDisplay">— Minima</span>
     <div class="hdr__status">
@@ -120,9 +120,9 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:15
   <section id="view-house" class="view">
     <h2 class="view__title">Create a Bet</h2>
     <div class="presets" id="presetBar">
-      <div class="preset preset--active" data-preset="flip" onclick="selectPreset('flip')"><div class="preset__name">Coin Flip</div><div class="preset__desc">2x</div></div>
-      <div class="preset" data-preset="dice" onclick="selectPreset('dice')"><div class="preset__name">Dice</div><div class="preset__desc">6x</div></div>
-      <div class="preset" data-preset="roulette" onclick="selectPreset('roulette')"><div class="preset__name">Roulette</div><div class="preset__desc">36x</div></div>
+      <div class="preset preset--active" data-preset="flip" onclick="selectPreset('flip')"><div class="preset__name">Coin Flip</div><div class="preset__desc">1:1</div></div>
+      <div class="preset" data-preset="dice" onclick="selectPreset('dice')"><div class="preset__name">Dice</div><div class="preset__desc">5:1</div></div>
+      <div class="preset" data-preset="roulette" onclick="selectPreset('roulette')"><div class="preset__name">Roulette</div><div class="preset__desc">35:1</div></div>
     </div>
     <label class="field">
       <span class="field__label">Bet Amount (what player stakes)</span>
@@ -144,12 +144,12 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:15
 
 <script>
 /* ============================================
-   UNIVERSAL CASINO v1.0
-   3-phase: create → take → auto-resolve
-   Based on Limit DEX MDS patterns
+   UNIVERSAL CASINO v1.1
+   3-phase commit-reveal: create → take → reveal → resolve
+   Fair odds — neither party can compute outcome early
    ============================================ */
 
-var SCRIPT = 'LET hpk=PREVSTATE(0) LET ha=PREVSTATE(1) LET hc=PREVSTATE(2) LET rng=PREVSTATE(3) LET po=PREVSTATE(4) LET bt=PREVSTATE(5) LET ph=PREVSTATE(6) LET to=PREVSTATE(7) IF ph EQ 0 AND SIGNEDBY(hpk) THEN RETURN TRUE ENDIF IF ph EQ 0 THEN ASSERT SAMESTATE(0 5) ASSERT STATE(6) EQ 1 ASSERT STATE(7) EQ to LET pp=STATE(11) ASSERT pp GTE 0 AND pp LT rng LET tt=@AMOUNT+bt ASSERT VERIFYOUT(@INPUT @ADDRESS tt @TOKENID TRUE) RETURN TRUE ENDIF IF ph EQ 1 AND SIGNEDBY(hpk) THEN LET hs=STATE(12) ASSERT SHA3(hs) EQ hc LET ps=PREVSTATE(10) LET h=SHA3(CONCAT(hs ps)) LET r=NUMBER(SUBSET(0 4 h))%rng LET pk=PREVSTATE(11) IF r EQ pk THEN LET w=bt*po ASSERT VERIFYOUT(@INPUT PREVSTATE(9) w @TOKENID FALSE) IF @AMOUNT GT w THEN ASSERT VERIFYOUT(@INPUT+1 ha @AMOUNT-w @TOKENID FALSE) ENDIF ELSE ASSERT VERIFYOUT(@INPUT ha @AMOUNT @TOKENID FALSE) ENDIF RETURN TRUE ENDIF IF ph EQ 1 AND @COINAGE GT to AND SIGNEDBY(PREVSTATE(8)) THEN RETURN TRUE ENDIF RETURN FALSE';
+var SCRIPT = 'LET hpk=PREVSTATE(0) LET ha=PREVSTATE(1) LET hc=PREVSTATE(2) LET rng=PREVSTATE(3) LET po=PREVSTATE(4) LET bt=PREVSTATE(5) LET ph=PREVSTATE(6) LET to=PREVSTATE(7) IF ph EQ 0 AND SIGNEDBY(hpk) THEN RETURN TRUE ENDIF IF ph EQ 0 THEN ASSERT SAMESTATE(0 5) ASSERT STATE(6) EQ 1 ASSERT STATE(7) EQ to ASSERT STATE(11) GTE 0 AND STATE(11) LT rng ASSERT VERIFYOUT(@INPUT @ADDRESS @AMOUNT+bt @TOKENID TRUE) RETURN TRUE ENDIF LET qk=PREVSTATE(8) LET pk=PREVSTATE(11) IF ph EQ 1 AND SIGNEDBY(hpk) THEN ASSERT SAMESTATE(0 5) ASSERT STATE(6) EQ 2 ASSERT SAMESTATE(7 11) LET hs=STATE(12) ASSERT SHA3(hs) EQ hc ASSERT VERIFYOUT(@INPUT @ADDRESS @AMOUNT @TOKENID TRUE) RETURN TRUE ENDIF IF ph EQ 1 AND @COINAGE GT to AND SIGNEDBY(qk) THEN RETURN TRUE ENDIF IF ph EQ 2 AND SIGNEDBY(qk) THEN LET ps=STATE(13) ASSERT SHA3(ps) EQ PREVSTATE(10) LET hs=PREVSTATE(12) LET h=SHA3(CONCAT(hs ps)) LET r=NUMBER(SUBSET(0 4 h))%rng IF r EQ pk THEN LET w=bt*po ASSERT VERIFYOUT(@INPUT PREVSTATE(9) w @TOKENID FALSE) IF @AMOUNT GT w THEN ASSERT VERIFYOUT(@INPUT+1 ha @AMOUNT-w @TOKENID FALSE) ENDIF ELSE ASSERT VERIFYOUT(@INPUT ha @AMOUNT @TOKENID FALSE) ENDIF RETURN TRUE ENDIF IF ph EQ 2 AND @COINAGE GT to AND SIGNEDBY(hpk) THEN RETURN TRUE ENDIF RETURN FALSE';
 
 var TIMEOUT_BLOCKS = 100;
 var PRESETS = {
@@ -166,8 +166,118 @@ var MY_KEYS = {};
 var DB_READY = false;
 var BETS = [];
 var SELECTED_PRESET = "flip";
-var SELECTED_PICK = 0;
-var PENDING_TXS = {};  // txid → {callback, statusEl}
+var CARD_PICKS = {};
+var PENDING_TXS = {};
+var AUTO_BUSY = {};
+
+// ===== Helpers =====
+function miniNum(val) { return parseFloat(parseFloat(val).toFixed(4)); }
+
+function getState(coin, port) {
+    if (!coin.state) return "";
+    for (var i = 0; i < coin.state.length; i++) {
+        if (coin.state[i].port === port || coin.state[i].port == port) return coin.state[i].data;
+    }
+    return "";
+}
+
+function gameType(range) {
+    if (range == 2) return { name:'Coin Flip', badge:'badge--flip' };
+    if (range == 6) return { name:'Dice', badge:'badge--dice' };
+    if (range == 36) return { name:'Roulette', badge:'badge--roulette' };
+    return { name:'Custom ('+range+')', badge:'badge--flip' };
+}
+
+function pickLabel(range, pick) {
+    if (range == 2) return parseInt(pick) === 0 ? 'Even' : 'Odd';
+    if (range == 6) return '' + (parseInt(pick) + 1);
+    return '' + (parseInt(pick) + 1);
+}
+
+function isPending(res) {
+    if (!res) return false;
+    if (res.pending === true) return true;
+    if (res.status === false && res.error && String(res.error).toLowerCase().indexOf("pending") >= 0) return true;
+    return false;
+}
+
+function showPending(el, msg, txid, onComplete) {
+    if (el) { el.className = "status status--warn"; el.innerText = msg || "Approve in Pending Actions..."; }
+    if (txid) {
+        PENDING_TXS[txid] = { callback: onComplete || null, el: el };
+        MDS.log("PENDING: waiting for approval of " + txid);
+    }
+}
+
+function showErr(el, msg, txid) {
+    if (el) { el.className = "status status--err"; el.innerText = msg; }
+    if (txid) MDS.cmd("txndelete id:" + txid);
+    MDS.log("ERROR: " + msg);
+}
+
+function showOk(el, msg) {
+    if (el) { el.className = "status status--ok"; el.innerText = msg; }
+}
+
+function clearPendingStatus() {
+    var els = document.querySelectorAll(".status--warn");
+    for (var i = 0; i < els.length; i++) {
+        els[i].className = "status status--ok"; els[i].innerText = "Confirmed!";
+        (function(el) { setTimeout(function() { el.innerText = ""; el.className = "status"; }, 4000); })(els[i]);
+    }
+}
+
+function extractResponse(res) {
+    if (!res || !res.response) return null;
+    var r = res.response;
+    if (typeof r === 'string') return r;
+    if (r.random) return r.random;
+    if (r.hash) return r.hash;
+    if (r.output) return r.output;
+    if (r.value) return r.value;
+    var keys = Object.keys(r);
+    for (var i = 0; i < keys.length; i++) {
+        if (typeof r[keys[i]] === 'string' && r[keys[i]].indexOf('0x') === 0) return r[keys[i]];
+    }
+    MDS.log("UNKNOWN response format: " + JSON.stringify(r));
+    return null;
+}
+
+function findCoins(tokenid, minAmount, excludeCoinid, callback) {
+    if (typeof excludeCoinid === 'function') { callback = excludeCoinid; excludeCoinid = null; }
+    MDS.cmd("coins relevant:true sendable:true tokenid:" + tokenid, function(res) {
+        if (!res.status || !res.response || res.response.length === 0) { callback(null); return; }
+        var available = res.response.filter(function(c) { return !c.state || c.state.length === 0; });
+        if (excludeCoinid) available = available.filter(function(c) { return c.coinid !== excludeCoinid; });
+        if (available.length === 0) { callback(null); return; }
+        var needed = parseFloat(minAmount);
+        var sorted = available.slice().sort(function(a, b) { return parseFloat(b.amount) - parseFloat(a.amount); });
+        if (parseFloat(sorted[0].amount) >= needed) { callback({ coins: [sorted[0]], total: parseFloat(sorted[0].amount) }); return; }
+        var selected = [], sum = 0;
+        for (var i = 0; i < sorted.length; i++) {
+            selected.push(sorted[i]); sum += parseFloat(sorted[i].amount);
+            if (sum >= needed) { callback({ coins: selected, total: sum }); return; }
+        }
+        callback(null);
+    });
+}
+
+function addMultipleInputs(txid, coins, idx, callback) {
+    if (idx >= coins.length) { callback(true); return; }
+    MDS.cmd("txninput id:" + txid + " coinid:" + coins[idx].coinid, function(res) {
+        if (!res.status) { callback(false); return; }
+        addMultipleInputs(txid, coins, idx + 1, callback);
+    });
+}
+
+function setStates(txid, states, idx, callback) {
+    if (idx >= states.length) { callback(); return; }
+    MDS.cmd("txnstate id:" + txid + " port:" + states[idx][0] + " value:" + states[idx][1], function() {
+        setStates(txid, states, idx + 1, callback);
+    });
+}
+
+function isMyKey(pubkey) { return MY_KEYS[pubkey] === true; }
 
 // ===== MDS INIT =====
 MDS.init(function(msg) {
@@ -198,7 +308,7 @@ function initApp() {
     setupUI();
 }
 
-// ===== Identity (from Limit) =====
+// ===== Identity =====
 function loadIdentity(callback) {
     try {
         var sp = localStorage.getItem("casino_pubkey");
@@ -257,33 +367,16 @@ function loadWalletKeys(callback) {
     });
 }
 
-function isMyKey(pubkey) { return MY_KEYS[pubkey] === true; }
-
 function finishInit() {
     loadWalletKeys(function() {
         DB_READY = true;
-        MDS.log("Casino v0.7 ready. Script=" + SCRIPT_ADDR + " Pub=" + MY_PUBKEY.substring(0,16) + "... Keys=" + Object.keys(MY_KEYS).length);
+        MDS.log("Casino v1.1 ready. Script=" + SCRIPT_ADDR + " Pub=" + MY_PUBKEY.substring(0,16) + "... Keys=" + Object.keys(MY_KEYS).length);
         refreshBets(); refreshBalance();
         updateSummary();
     });
 }
 
-// ===== Helpers (from Limit) =====
-function isPending(res) {
-    if (!res) return false;
-    if (res.pending === true) return true;
-    if (res.status === false && res.error && String(res.error).toLowerCase().indexOf("pending") >= 0) return true;
-    return false;
-}
-
-function showPending(el, msg, txid, onComplete) {
-    if (el) { el.className = "status status--warn"; el.innerText = msg || "Approve in Pending Actions..."; }
-    if (txid) {
-        PENDING_TXS[txid] = { callback: onComplete || null, el: el };
-        MDS.log("PENDING: waiting for approval of " + txid);
-    }
-}
-
+// ===== Pending TX Handling =====
 function checkPendingComplete() {
     var ids = Object.keys(PENDING_TXS);
     if (ids.length === 0) return;
@@ -295,24 +388,14 @@ function checkPendingComplete() {
                 if (res.response[i].id === txid) { found = res.response[i]; break; }
             }
             if (!found) { delete PENDING_TXS[txid]; return; }
-            // Check if signatures are populated (pending approval executed txnsign)
             var sigs = found.witness && found.witness.signatures;
             var hasSigs = sigs && sigs.length > 0 && sigs[0] && sigs[0].signatures && sigs[0].signatures.length > 0;
-            if (!hasSigs) {
-                MDS.log("PENDING: " + txid + " — waiting for signatures (pending not yet executed)");
-                return;
-            }
-            // Signatures present — check proofs not already added
-            var proofs = found.witness.mmrproofs;
-            if (proofs && proofs.length > 0) {
-                MDS.log("PENDING: " + txid + " — already has proofs, posting directly");
-            }
+            if (!hasSigs) return;
             MDS.log("PENDING APPROVED: completing " + txid);
             var entry = PENDING_TXS[txid];
             delete PENDING_TXS[txid];
             MDS.cmd("txnbasics id:" + txid + ";txnpost id:" + txid, function(resArr) {
                 var rp = Array.isArray(resArr) ? resArr[resArr.length - 1] : resArr;
-                MDS.log("AUTO-COMPLETE: " + txid + " status=" + (rp ? rp.status : "null") + " err=" + (rp ? rp.error || "none" : "no response"));
                 if (rp && rp.status) {
                     MDS.notify("Transaction completed!");
                     if (entry.callback) entry.callback(true);
@@ -324,73 +407,6 @@ function checkPendingComplete() {
             });
         });
     });
-}
-
-function showErr(el, msg, txid) {
-    if (el) { el.className = "status status--err"; el.innerText = msg; }
-    if (txid) MDS.cmd("txndelete id:" + txid);
-    MDS.log("ERROR: " + msg);
-}
-
-function showOk(el, msg) {
-    if (el) { el.className = "status status--ok"; el.innerText = msg; }
-}
-
-function clearPendingStatus() {
-    var els = document.querySelectorAll(".status--warn");
-    for (var i = 0; i < els.length; i++) {
-        els[i].className = "status status--ok"; els[i].innerText = "Confirmed!";
-        (function(el) { setTimeout(function() { el.innerText = ""; el.className = "status"; }, 4000); })(els[i]);
-    }
-}
-
-function getState(coin, port) {
-    if (!coin.state) return "";
-    for (var i = 0; i < coin.state.length; i++) {
-        if (coin.state[i].port === port || coin.state[i].port == port) return coin.state[i].data;
-    }
-    return "";
-}
-
-function findCoins(tokenid, minAmount, excludeCoinid, callback) {
-    if (typeof excludeCoinid === 'function') { callback = excludeCoinid; excludeCoinid = null; }
-    MDS.cmd("coins relevant:true sendable:true tokenid:" + tokenid, function(res) {
-        if (!res.status || !res.response || res.response.length === 0) { callback(null); return; }
-        // Only use simple wallet coins — exclude any at script addresses (Limit DEX, Casino, etc)
-        var available = res.response.filter(function(c) { return !c.state || c.state.length === 0; });
-        if (excludeCoinid) available = available.filter(function(c) { return c.coinid !== excludeCoinid; });
-        if (available.length === 0) { callback(null); return; }
-        var needed = parseFloat(minAmount);
-        var sorted = available.slice().sort(function(a, b) { return parseFloat(b.amount) - parseFloat(a.amount); });
-        if (parseFloat(sorted[0].amount) >= needed) { callback({ coins: [sorted[0]], total: parseFloat(sorted[0].amount) }); return; }
-        var selected = [], sum = 0;
-        for (var i = 0; i < sorted.length; i++) {
-            selected.push(sorted[i]); sum += parseFloat(sorted[i].amount);
-            if (sum >= needed) { callback({ coins: selected, total: sum }); return; }
-        }
-        callback(null);
-    });
-}
-
-function addMultipleInputs(txid, coins, idx, callback) {
-    if (idx >= coins.length) { callback(true); return; }
-    MDS.cmd("txninput id:" + txid + " coinid:" + coins[idx].coinid, function(res) {
-        if (!res.status) { callback(false); return; }
-        addMultipleInputs(txid, coins, idx + 1, callback);
-    });
-}
-
-function gameType(range) {
-    if (range == 2) return { name:'Coin Flip', badge:'badge--flip' };
-    if (range == 6) return { name:'Dice', badge:'badge--dice' };
-    if (range == 36) return { name:'Roulette', badge:'badge--roulette' };
-    return { name:'Custom ('+range+')', badge:'badge--flip' };
-}
-
-function pickLabel(range, pick) {
-    if (range == 2) return parseInt(pick) === 0 ? 'Even' : 'Odd';
-    if (range == 6) return '' + (parseInt(pick) + 1);
-    return '' + (parseInt(pick) + 1);
 }
 
 // ===== UI Setup =====
@@ -416,12 +432,12 @@ function selectPreset(id) {
 function updateSummary() {
     var p = PRESETS[SELECTED_PRESET];
     var bet = parseFloat(document.getElementById("betAmountInput").value) || 0;
-    var stake = bet * (p.payout - 1);
+    var stake = miniNum(bet * (p.payout - 1));
     if (stake <= 0) stake = bet;
     var el = document.getElementById("houseSummary");
     el.innerHTML = "Lock: <b>" + stake.toFixed(2) + " Minima</b> | Player bets: <b>" + bet.toFixed(2) + "</b> | " +
         "Win: <b>+" + bet.toFixed(2) + "</b> | Lose: <b>-" + stake.toFixed(2) + "</b> | Odds: <b>" + (p.payout - 1) + ":1</b>";
-    document.getElementById("btnCreate").innerText = "Create Bet — Lock " + stake.toFixed(2) + " Minima";
+    document.getElementById("btnCreate").innerText = "Create Bet \u2014 Lock " + stake.toFixed(2) + " Minima";
 }
 
 function updateBlock(msg) {
@@ -442,13 +458,14 @@ function refreshBets() {
     MDS.cmd("coins address:" + SCRIPT_ADDR, function(res) {
         BETS = (res.status && res.response) ? res.response : [];
         var summary = BETS.map(function(c) {
-            return "phase=" + getState(c, 6) + " amt=" + c.amount + " id=" + c.coinid.substring(0,12);
+            return "ph=" + getState(c, 6) + " amt=" + c.amount + " id=" + c.coinid.substring(0,12);
         }).join(" | ");
         MDS.log("Casino coins: " + BETS.length + (summary ? " [" + summary + "]" : ""));
-        // Clean up AUTO_BUSY for coins that no longer exist
-        var coinIds = {};
-        BETS.forEach(function(c) { coinIds[c.coinid] = true; });
-        Object.keys(AUTO_BUSY).forEach(function(id) { if (!coinIds[id]) delete AUTO_BUSY[id]; });
+        Object.keys(AUTO_BUSY).forEach(function(id) {
+            var found = false;
+            BETS.forEach(function(c) { if (c.coinid === id) found = true; });
+            if (!found) delete AUTO_BUSY[id];
+        });
         renderOpenBets();
         renderMyBets();
     });
@@ -462,28 +479,29 @@ function renderOpenBets() {
     });
     if (open.length === 0) { el.innerHTML = '<div class="empty">No open bets right now</div>'; return; }
     var html = "";
-    open.forEach(function(coin, i) {
+    open.forEach(function(coin) {
         var range = parseInt(getState(coin, 3)) || 2;
         var payout = parseInt(getState(coin, 4)) || 2;
         var bet = getState(coin, 5) || "0";
         var gt = gameType(range);
         var preset = Object.values(PRESETS).find(function(p) { return p.range === range; });
         var safeCoinId = coin.coinid.replace(/[^a-fA-F0-9x]/g, '');
+        var currentPick = CARD_PICKS[safeCoinId] || 0;
 
         html += '<div class="card">';
-        html += '<div class="card-row"><span class="badge ' + gt.badge + '">' + gt.name + '</span><span class="stat">' + payout + 'x</span></div>';
-        html += '<div class="card-row"><span class="info">Bet: <b>' + bet + ' Minima</b></span><span class="info">Win: <b>' + (parseFloat(bet)*payout).toFixed(2) + '</b></span></div>';
+        html += '<div class="card-row"><span class="badge ' + gt.badge + '">' + gt.name + '</span><span class="stat">' + (payout-1) + ':1</span></div>';
+        html += '<div class="card-row"><span class="info">Bet: <b>' + bet + ' Minima</b></span><span class="info">Win: <b>' + miniNum(parseFloat(bet)*payout).toFixed(2) + '</b></span></div>';
         html += '<div class="card-row"><span class="info">Pot: <b>' + parseFloat(coin.amount).toFixed(2) + ' Minima</b></span></div>';
         html += '<div class="field__label" style="margin-top:10px">Pick your number</div>';
-        html += '<div class="picks" id="picks_' + i + '">';
+        html += '<div class="picks">';
         var labels = preset ? preset.labels : null;
         var pickCount = labels ? labels.length : range;
         for (var p = 0; p < pickCount; p++) {
             var label = labels ? labels[p] : '' + (p + 1);
-            html += '<div class="pick' + (SELECTED_PICK==p ? ' pick--active' : '') + '" onclick="SELECTED_PICK='+p+';renderOpenBets()">' + label + '</div>';
+            html += '<div class="pick' + (currentPick==p ? ' pick--active' : '') + '" onclick="CARD_PICKS[\'' + safeCoinId + '\']=' + p + ';renderOpenBets()">' + label + '</div>';
         }
         html += '</div>';
-        html += '<button class="btn btn--green btn--full" onclick="takeBet(\'' + safeCoinId + '\')">Take Bet — ' + bet + ' Minima</button>';
+        html += '<button class="btn btn--green btn--full" onclick="takeBet(\'' + safeCoinId + '\',this)">Take Bet \u2014 ' + bet + ' Minima</button>';
         html += '</div>';
     });
     el.innerHTML = html;
@@ -498,7 +516,6 @@ function renderMyBets() {
     var tabEl = document.querySelector('[data-view="mybets"]');
     if (tabEl) tabEl.innerText = "My Bets" + (mine.length ? " (" + mine.length + ")" : "");
     if (mine.length === 0) { el.innerHTML = '<div class="empty">No active bets</div>'; return; }
-    var block = parseInt(document.getElementById("blockHeight").innerText.replace("#","")) || 0;
     var html = "";
     mine.forEach(function(coin) {
         var phase = parseInt(getState(coin, 6)) || 0;
@@ -507,30 +524,49 @@ function renderMyBets() {
         var bet = getState(coin, 5) || "0";
         var gt = gameType(range);
         var isHouse = isMyKey(getState(coin, 0));
+        var isPlayer = isMyKey(getState(coin, 8));
         var timeout = parseInt(getState(coin, 7)) || 0;
         var age = parseInt(coin.age) || 0;
         var pastDeadline = timeout > 0 && age > timeout;
         var safeCoinId = coin.coinid.replace(/[^a-fA-F0-9x]/g, '');
+        var statusId = 'status_' + safeCoinId.substring(0, 16);
 
         var phBadge = phase === 0 ? 'badge--open' : phase === 1 ? 'badge--taken' : 'badge--reveal';
-        var phLabel = phase === 0 ? 'Open' : phase === 1 ? 'Taken' : 'Revealing';
+        var phLabel = phase === 0 ? 'Open' : phase === 1 ? 'Taken' : 'Revealed';
 
         html += '<div class="card">';
         html += '<div class="card-row"><span class="badge ' + gt.badge + '">' + gt.name + '</span><span class="badge ' + phBadge + '">' + phLabel + '</span></div>';
         html += '<div class="card-row"><span class="info">Role: <b>' + (isHouse?'House':'Player') + '</b></span><span class="info">Pot: <b>' + parseFloat(coin.amount).toFixed(2) + '</b></span></div>';
-        html += '<div class="card-row"><span class="info">Bet: <b>' + bet + '</b> | Payout: <b>' + payout + 'x</b></span></div>';
+        html += '<div class="card-row"><span class="info">Bet: <b>' + bet + '</b> | Odds: <b>' + (payout-1) + ':1</b></span></div>';
         if (phase >= 1) html += '<div class="card-row"><span class="info">Pick: <b>' + pickLabel(range, getState(coin, 11)) + '</b></span></div>';
         if (timeout > 0) {
             var left = timeout - age;
             html += '<div class="card-row"><span class="info">Timeout: <b>' + (left > 0 ? left + ' blocks' : 'EXPIRED') + '</b></span></div>';
         }
 
-        var statusId = 'status_' + safeCoinId.substring(0, 16);
-        html += '<div style="display:flex;gap:6px;margin-top:10px">';
-        if (phase === 0 && isHouse) html += '<button class="btn btn--ghost btn--sm" onclick="cancelBet(\'' + safeCoinId + '\',\'' + statusId + '\')">Cancel</button>';
-        if (phase === 1 && isHouse) html += '<span class="info">Auto-resolving on next block...</span>';
-        if (phase === 1 && !isHouse) html += '<span class="info">Waiting for house to auto-resolve...</span>';
-        if (phase === 1 && !isHouse && pastDeadline) html += '<button class="btn btn--red btn--sm" onclick="claimTimeout(\'' + safeCoinId + '\',\'' + statusId + '\')">Claim Timeout</button>';
+        html += '<div style="display:flex;gap:6px;margin-top:10px;flex-wrap:wrap">';
+        if (phase === 0 && isHouse) {
+            html += '<button class="btn btn--ghost btn--sm" onclick="cancelBet(\'' + safeCoinId + '\',\'' + statusId + '\',this)">Cancel</button>';
+        }
+        if (phase === 1 && isHouse) {
+            html += '<span class="info">Auto-revealing on next block...</span>';
+        }
+        if (phase === 1 && isPlayer) {
+            html += '<span class="info">Waiting for house to reveal...</span>';
+        }
+        if (phase === 1 && isPlayer && pastDeadline) {
+            html += '<button class="btn btn--red btn--sm" onclick="claimTimeout(\'' + safeCoinId + '\',\'' + statusId + '\',this)">Claim Timeout</button>';
+        }
+        if (phase === 2 && isPlayer) {
+            html += '<span class="info">Auto-resolving...</span>';
+            html += '<button class="btn btn--green btn--sm" onclick="doPlayerResolve(\'' + safeCoinId + '\',\'' + statusId + '\',this)">Resolve Now</button>';
+        }
+        if (phase === 2 && isHouse) {
+            html += '<span class="info">Waiting for player to resolve...</span>';
+        }
+        if (phase === 2 && isHouse && pastDeadline) {
+            html += '<button class="btn btn--red btn--sm" onclick="claimTimeout(\'' + safeCoinId + '\',\'' + statusId + '\',this)">Claim Timeout</button>';
+        }
         html += '</div>';
         html += '<div id="' + statusId + '" class="status"></div>';
         html += '</div>';
@@ -539,56 +575,36 @@ function renderMyBets() {
 }
 
 // ===== Create Bet =====
-function extractResponse(res) {
-    // Minima commands return response as either a string, object with known fields, or nested
-    if (!res || !res.response) return null;
-    var r = res.response;
-    if (typeof r === 'string') return r;
-    // Try known field names
-    if (r.random) return r.random;
-    if (r.hash) return r.hash;
-    if (r.output) return r.output;
-    if (r.value) return r.value;
-    // Last resort — find first hex string value
-    var keys = Object.keys(r);
-    for (var i = 0; i < keys.length; i++) {
-        if (typeof r[keys[i]] === 'string' && r[keys[i]].indexOf('0x') === 0) return r[keys[i]];
-    }
-    MDS.log("UNKNOWN response format: " + JSON.stringify(r));
-    return null;
-}
-
 function createBet() {
-    if (!MY_PUBKEY || !MY_HEX_ADDR) { showErr(document.getElementById("createStatus"), "Identity not loaded — refresh page"); return; }
+    if (!MY_PUBKEY || !MY_HEX_ADDR) { showErr(document.getElementById("createStatus"), "Identity not loaded"); return; }
     var p = PRESETS[SELECTED_PRESET];
     var bet = parseFloat(document.getElementById("betAmountInput").value);
     if (!bet || bet <= 0 || isNaN(bet)) { showErr(document.getElementById("createStatus"), "Enter a valid bet amount"); return; }
-    var stake = bet * (p.payout - 1);
+    var stake = miniNum(bet * (p.payout - 1));
     if (stake <= 0) stake = bet;
     var statusEl = document.getElementById("createStatus");
+    var btn = document.getElementById("btnCreate");
+    btn.classList.add("btn--disabled");
     statusEl.className = "status"; statusEl.innerText = "Generating secret...";
 
     MDS.cmd("random", function(rres) {
-        MDS.log("random: " + JSON.stringify(rres));
         var secret = extractResponse(rres);
-        if (!secret) { showErr(statusEl, "Random failed: " + JSON.stringify(rres)); return; }
+        if (!secret) { showErr(statusEl, "Random failed"); btn.classList.remove("btn--disabled"); return; }
 
         MDS.cmd("hash data:" + secret, function(hres) {
-            MDS.log("hash: " + JSON.stringify(hres));
             var commit = extractResponse(hres);
-            if (!commit) { showErr(statusEl, "Hash failed: " + JSON.stringify(hres)); return; }
+            if (!commit) { showErr(statusEl, "Hash failed"); btn.classList.remove("btn--disabled"); return; }
 
-            // Store secret keyed by commit so we can find it for any bet
             MDS.keypair.set("casino_secret_for_" + commit, secret, function() {
-
                 var stateObj = '{"0":"' + MY_PUBKEY + '","1":"' + MY_HEX_ADDR + '","2":"' + commit + '","3":"' + p.range + '","4":"' + p.payout + '","5":"' + bet + '","6":"0","7":"' + TIMEOUT_BLOCKS + '"}';
                 var cmd = "send amount:" + stake + " address:" + SCRIPT_ADDR + " state:" + stateObj;
                 MDS.log("CREATE: " + cmd);
                 statusEl.innerText = "Sending...";
 
                 MDS.cmd(cmd, function(sres) {
+                    btn.classList.remove("btn--disabled");
                     if (isPending(sres)) {
-                        showPending(statusEl, "Bet queued — approve in Pending Actions");
+                        showPending(statusEl, "Bet queued \u2014 approve in Pending Actions");
                     } else if (sres.status) {
                         showOk(statusEl, "Bet created! Waiting for confirmation...");
                         setTimeout(function() { refreshBets(); refreshBalance(); }, 3000);
@@ -602,27 +618,31 @@ function createBet() {
 }
 
 // ===== Cancel Bet =====
-function cancelBet(coinid, statusId) {
+function cancelBet(coinid, statusId, btnEl) {
     var coin = BETS.find(function(c) { return c.coinid === coinid; });
     if (!coin) return;
+    if (btnEl) btnEl.classList.add("btn--disabled");
     var txid = "cancel_" + Date.now();
     var statusEl = document.getElementById(statusId || "myBetsStatus");
     statusEl.className = "status"; statusEl.innerText = "Cancelling...";
 
     MDS.cmd("txncreate id:" + txid, function(r0) {
-        if (!r0.status) { showErr(statusEl, "txncreate failed", txid); return; }
+        if (!r0.status) { showErr(statusEl, "txncreate failed", txid); if (btnEl) btnEl.classList.remove("btn--disabled"); return; }
         MDS.cmd("txninput id:" + txid + " coinid:" + coinid, function(r1) {
-            if (!r1.status) { showErr(statusEl, "input failed", txid); return; }
+            if (!r1.status) { showErr(statusEl, "input failed", txid); if (btnEl) btnEl.classList.remove("btn--disabled"); return; }
             MDS.cmd("txnoutput id:" + txid + " amount:" + coin.amount + " address:" + MY_HEX_ADDR + " storestate:false", function(r2) {
+                if (!r2.status) { showErr(statusEl, "output failed", txid); if (btnEl) btnEl.classList.remove("btn--disabled"); return; }
                 MDS.cmd("txnsign id:" + txid + " publickey:" + getState(coin, 0), function(rs) {
                     if (isPending(rs)) {
-                        showPending(statusEl, "Cancel pending — approve in Pending Actions", txid, function(ok) {
+                        showPending(statusEl, "Cancel pending \u2014 approve in Pending Actions", txid, function(ok) {
                             if (ok) showOk(statusEl, "Cancelled!");
+                            if (btnEl) btnEl.classList.remove("btn--disabled");
                         });
                         return;
                     }
                     MDS.cmd("txnbasics id:" + txid + ";txnpost id:" + txid, function(resArr) {
                         var rp = Array.isArray(resArr) ? resArr[resArr.length - 1] : resArr;
+                        if (btnEl) btnEl.classList.remove("btn--disabled");
                         if (rp && rp.status) {
                             showOk(statusEl, "Cancelled!");
                             refreshBets(); refreshBalance();
@@ -636,64 +656,83 @@ function cancelBet(coinid, statusId) {
     });
 }
 
-// ===== Take Bet =====
-function takeBet(coinid) {
-    if (!MY_PUBKEY || !MY_HEX_ADDR) { showErr(document.getElementById("playStatus"), "Identity not loaded — refresh page"); return; }
+// ===== Take Bet (Path B: phase 0→1, player commits secret hash + pick) =====
+function takeBet(coinid, btnEl) {
+    if (!MY_PUBKEY || !MY_HEX_ADDR) { showErr(document.getElementById("playStatus"), "Identity not loaded"); return; }
     var coin = BETS.find(function(c) { return c.coinid === coinid; });
     if (!coin) return;
+    if (btnEl) btnEl.classList.add("btn--disabled");
     var bet = getState(coin, 5);
-    var total = parseFloat(coin.amount) + parseFloat(bet);
+    var total = miniNum(parseFloat(coin.amount) + parseFloat(bet));
+    var pick = CARD_PICKS[coinid] || 0;
     var txid = "take_" + Date.now();
     var statusEl = document.getElementById("playStatus");
     statusEl.className = "status"; statusEl.innerText = "Generating secret...";
 
     MDS.cmd("random", function(rres) {
         var secret = extractResponse(rres);
-        if (!secret) { showErr(statusEl, "Random failed"); return; }
-        findCoins("0x00", parseFloat(bet), coinid, function(result) {
-            if (!result) { showErr(statusEl, "Insufficient Minima (need " + bet + ")"); return; }
-            statusEl.innerText = "Building transaction...";
-            MDS.cmd("txncreate id:" + txid, function(r0) {
-                if (!r0.status) { showErr(statusEl, "txncreate failed", txid); return; }
-                MDS.cmd("txninput id:" + txid + " coinid:" + coinid, function(r1) {
-                    if (!r1.status) { showErr(statusEl, "contract input failed", txid); return; }
-                    addMultipleInputs(txid, result.coins, 0, function(ok) {
-                        if (!ok) { showErr(statusEl, "fund input failed", txid); return; }
-                        MDS.cmd("txnoutput id:" + txid + " amount:" + total + " address:" + SCRIPT_ADDR + " storestate:true", function(r3) {
-                            if (!r3.status) { showErr(statusEl, "output failed", txid); return; }
-                            var change = (result.total - parseFloat(bet)).toFixed(8);
-                            var afterChange = function() {
-                                var states = [
-                                    [0, getState(coin, 0)], [1, getState(coin, 1)], [2, getState(coin, 2)],
-                                    [3, getState(coin, 3)], [4, getState(coin, 4)], [5, getState(coin, 5)],
-                                    [6, "1"], [7, getState(coin, 7)],
-                                    [8, MY_PUBKEY], [9, MY_HEX_ADDR], [10, secret], [11, "" + SELECTED_PICK]
-                                ];
-                                setStates(txid, states, 0, function() {
-                                    statusEl.innerText = "Signing...";
-                                    MDS.cmd("txnsign id:" + txid + " publickey:auto", function(rs) {
-                                        if (isPending(rs)) {
-                                            showPending(statusEl, "Take bet pending — approve in Pending Actions", txid, function(ok2) {
-                                                if (ok2) { showOk(statusEl, "Bet taken!"); refreshBets(); }
+        if (!secret) { showErr(statusEl, "Random failed"); if (btnEl) btnEl.classList.remove("btn--disabled"); return; }
+
+        // Commit = SHA3(secret) — player only reveals the hash, not the secret
+        MDS.cmd("hash data:" + secret, function(hres) {
+            var commit = extractResponse(hres);
+            if (!commit) { showErr(statusEl, "Hash failed"); if (btnEl) btnEl.classList.remove("btn--disabled"); return; }
+
+            // Store secret keyed by commit for later resolve
+            MDS.keypair.set("casino_psecret_for_" + commit, secret, function() {
+                findCoins("0x00", parseFloat(bet), coinid, function(result) {
+                    if (!result) { showErr(statusEl, "Insufficient Minima (need " + bet + ")"); if (btnEl) btnEl.classList.remove("btn--disabled"); return; }
+                    statusEl.innerText = "Building transaction...";
+                    MDS.cmd("txncreate id:" + txid, function(r0) {
+                        if (!r0.status) { showErr(statusEl, "txncreate failed", txid); if (btnEl) btnEl.classList.remove("btn--disabled"); return; }
+                        MDS.cmd("txninput id:" + txid + " coinid:" + coinid, function(r1) {
+                            if (!r1.status) { showErr(statusEl, "contract input failed", txid); if (btnEl) btnEl.classList.remove("btn--disabled"); return; }
+                            addMultipleInputs(txid, result.coins, 0, function(ok) {
+                                if (!ok) { showErr(statusEl, "fund input failed", txid); if (btnEl) btnEl.classList.remove("btn--disabled"); return; }
+                                MDS.cmd("txnoutput id:" + txid + " amount:" + total + " address:" + SCRIPT_ADDR + " storestate:true", function(r3) {
+                                    if (!r3.status) { showErr(statusEl, "output failed", txid); if (btnEl) btnEl.classList.remove("btn--disabled"); return; }
+                                    var change = miniNum(result.total - parseFloat(bet));
+                                    var afterChange = function() {
+                                        var states = [
+                                            [0, getState(coin, 0)], [1, getState(coin, 1)], [2, getState(coin, 2)],
+                                            [3, getState(coin, 3)], [4, getState(coin, 4)], [5, getState(coin, 5)],
+                                            [6, "1"], [7, getState(coin, 7)],
+                                            [8, MY_PUBKEY], [9, MY_HEX_ADDR],
+                                            [10, commit],
+                                            [11, "" + pick]
+                                        ];
+                                        setStates(txid, states, 0, function() {
+                                            statusEl.innerText = "Signing...";
+                                            MDS.cmd("txnsign id:" + txid + " publickey:auto", function(rs) {
+                                                if (isPending(rs)) {
+                                                    showPending(statusEl, "Take bet pending \u2014 approve in Pending Actions", txid, function(ok2) {
+                                                        if (ok2) { showOk(statusEl, "Bet taken!"); refreshBets(); }
+                                                        if (btnEl) btnEl.classList.remove("btn--disabled");
+                                                    });
+                                                    return;
+                                                }
+                                                MDS.cmd("txnbasics id:" + txid + ";txnpost id:" + txid, function(resArr) {
+                                                    var rp = Array.isArray(resArr) ? resArr[resArr.length - 1] : resArr;
+                                                    if (btnEl) btnEl.classList.remove("btn--disabled");
+                                                    if (rp && rp.status) {
+                                                        showOk(statusEl, "Bet taken! Waiting for house to reveal...");
+                                                        MDS.notify("Bet taken!");
+                                                        setTimeout(function() { refreshBets(); refreshBalance(); }, 3000);
+                                                    } else {
+                                                        showErr(statusEl, "Post failed: " + (rp ? rp.error : ""), txid);
+                                                    }
+                                                });
                                             });
-                                            return;
-                                        }
-                                        MDS.cmd("txnbasics id:" + txid + ";txnpost id:" + txid, function(resArr) {
-                                            var rp = Array.isArray(resArr) ? resArr[resArr.length - 1] : resArr;
-                                            if (rp && rp.status) {
-                                                showOk(statusEl, "Bet taken! House will auto-resolve...");
-                                                MDS.notify("Bet taken!");
-                                                setTimeout(function() { refreshBets(); refreshBalance(); }, 3000);
-                                            } else {
-                                                showErr(statusEl, "Post failed: " + (rp ? rp.error : ""), txid);
-                                            }
                                         });
-                                    });
+                                    };
+                                    if (change > 0.000001) {
+                                        MDS.cmd("txnoutput id:" + txid + " amount:" + change + " address:" + MY_HEX_ADDR + " storestate:false", function(rc) {
+                                            if (!rc.status) { showErr(statusEl, "change output failed", txid); if (btnEl) btnEl.classList.remove("btn--disabled"); return; }
+                                            afterChange();
+                                        });
+                                    } else { afterChange(); }
                                 });
-                            };
-                            if (parseFloat(change) > 0.000001) {
-                                MDS.cmd("txnoutput id:" + txid + " amount:" + change + " address:" + MY_HEX_ADDR + " storestate:false", function() { afterChange(); });
-                            } else { afterChange(); }
+                            });
                         });
                     });
                 });
@@ -702,37 +741,177 @@ function takeBet(coinid) {
     });
 }
 
-function setStates(txid, states, idx, callback) {
-    if (idx >= states.length) { callback(); return; }
-    MDS.cmd("txnstate id:" + txid + " port:" + states[idx][0] + " value:" + states[idx][1], function() {
-        setStates(txid, states, idx + 1, callback);
+// ===== House Auto-Reveal (Path C: phase 1→2) =====
+function doAutoReveal(coin) {
+    var coinid = coin.coinid;
+    var betCommit = getState(coin, 2);
+    MDS.log("AUTO-REVEAL: " + coinid.substring(0, 16));
+
+    MDS.keypair.get("casino_secret_for_" + betCommit, function(sres) {
+        if (!sres.value) {
+            MDS.log("AUTO-REVEAL: no secret for commit " + betCommit.substring(0,16));
+            delete AUTO_BUSY[coinid];
+            return;
+        }
+        var housesecret = sres.value;
+        var txid = "autoreveal_" + Date.now();
+        MDS.cmd("txncreate id:" + txid, function(r0) {
+            if (!r0.status) { MDS.log("AUTO-REVEAL txncreate failed"); delete AUTO_BUSY[coinid]; return; }
+            MDS.cmd("txninput id:" + txid + " coinid:" + coinid, function(r1) {
+                if (!r1.status) { MDS.cmd("txndelete id:" + txid); delete AUTO_BUSY[coinid]; return; }
+                MDS.cmd("txnoutput id:" + txid + " amount:" + coin.amount + " address:" + SCRIPT_ADDR + " storestate:true", function(r2) {
+                    if (!r2.status) { showErr(null, "reveal output failed", txid); delete AUTO_BUSY[coinid]; return; }
+                    var states = [
+                        [0, getState(coin, 0)], [1, getState(coin, 1)], [2, getState(coin, 2)],
+                        [3, getState(coin, 3)], [4, getState(coin, 4)], [5, getState(coin, 5)],
+                        [6, "2"], [7, getState(coin, 7)],
+                        [8, getState(coin, 8)], [9, getState(coin, 9)],
+                        [10, getState(coin, 10)], [11, getState(coin, 11)],
+                        [12, housesecret]
+                    ];
+                    setStates(txid, states, 0, function() {
+                        MDS.cmd("txnsign id:" + txid + " publickey:" + getState(coin, 0), function(rs) {
+                            if (isPending(rs)) {
+                                showPending(document.getElementById("myBetsStatus"), "Auto-reveal pending \u2014 approve in Pending Actions", txid, function(ok) {
+                                    delete AUTO_BUSY[coinid];
+                                    if (ok) refreshBets();
+                                });
+                                return;
+                            }
+                            MDS.cmd("txnbasics id:" + txid + ";txnpost id:" + txid, function(resArr) {
+                                var rp = Array.isArray(resArr) ? resArr[resArr.length - 1] : resArr;
+                                MDS.log("AUTO-REVEAL posted: " + (rp ? rp.status : "null"));
+                                if (rp && rp.status) {
+                                    MDS.notify("Secret revealed! Waiting for player...");
+                                } else {
+                                    MDS.log("AUTO-REVEAL failed: " + (rp ? rp.error : ""));
+                                    MDS.cmd("txndelete id:" + txid);
+                                }
+                                delete AUTO_BUSY[coinid];
+                                refreshBets(); refreshBalance();
+                            });
+                        });
+                    });
+                });
+            });
+        });
     });
 }
 
-// v1.0: houseReveal, playerResolve, doResolve, buildResolve removed
-// House auto-resolves at phase 1 via autoProcess → doAutoResolve
-
-// ===== Claim Timeout =====
-function claimTimeout(coinid, statusId) {
+// ===== Player Resolve (Path D: phase 2→payout) =====
+function doPlayerResolve(coinid, statusId, btnEl) {
     var coin = BETS.find(function(c) { return c.coinid === coinid; });
     if (!coin) return;
+    if (btnEl) btnEl.classList.add("btn--disabled");
+    var statusEl = statusId ? document.getElementById(statusId) : document.getElementById("myBetsStatus");
+    var playerCommit = getState(coin, 10);
+    MDS.log("RESOLVE: " + coinid.substring(0, 16) + " commit=" + playerCommit.substring(0,16));
+
+    MDS.keypair.get("casino_psecret_for_" + playerCommit, function(sres) {
+        if (!sres.value) {
+            showErr(statusEl, "Player secret not found for this bet");
+            if (btnEl) btnEl.classList.remove("btn--disabled");
+            return;
+        }
+        var playersecret = sres.value;
+        var housesecret = getState(coin, 12);
+        var bet = getState(coin, 5);
+        var payout = parseInt(getState(coin, 4));
+        var range = parseInt(getState(coin, 3));
+        var playerpick = parseInt(getState(coin, 11));
+        var winnings = miniNum(parseFloat(bet) * payout);
+        var totalAmt = parseFloat(coin.amount);
+        var houseaddr = getState(coin, 1);
+        var playeraddr = getState(coin, 9);
+
+        // Compute winner locally
+        var combined = housesecret + playersecret.substring(2);
+        MDS.cmd("hash data:" + combined, function(hres) {
+            var hash = extractResponse(hres);
+            if (!hash) { showErr(statusEl, "Hash failed"); if (btnEl) btnEl.classList.remove("btn--disabled"); return; }
+            var num = parseInt(hash.substring(2, 10), 16);
+            var result = num % range;
+            var playerWins = (result === playerpick);
+            MDS.log("RESOLVE: result=" + result + " pick=" + playerpick + " playerWins=" + playerWins);
+            if (statusEl) { statusEl.className = "status"; statusEl.innerText = playerWins ? "You won! Building payout..." : "House won. Building payout..."; }
+
+            var txid = "resolve_" + Date.now();
+            MDS.cmd("txncreate id:" + txid, function(r0) {
+                if (!r0.status) { showErr(statusEl, "txncreate failed"); if (btnEl) btnEl.classList.remove("btn--disabled"); return; }
+                MDS.cmd("txninput id:" + txid + " coinid:" + coinid, function(r1) {
+                    if (!r1.status) { showErr(statusEl, "input failed", txid); if (btnEl) btnEl.classList.remove("btn--disabled"); return; }
+
+                    var afterOutputs = function() {
+                        MDS.cmd("txnstate id:" + txid + " port:13 value:" + playersecret, function() {
+                            MDS.cmd("txnsign id:" + txid + " publickey:" + getState(coin, 8), function(rs) {
+                                if (isPending(rs)) {
+                                    showPending(statusEl, "Resolve pending \u2014 approve in Pending Actions", txid, function(ok) {
+                                        if (ok) { showOk(statusEl, playerWins ? "You won!" : "House won."); refreshBets(); }
+                                        if (btnEl) btnEl.classList.remove("btn--disabled");
+                                    });
+                                    return;
+                                }
+                                MDS.cmd("txnbasics id:" + txid + ";txnpost id:" + txid, function(resArr) {
+                                    var rp = Array.isArray(resArr) ? resArr[resArr.length - 1] : resArr;
+                                    if (btnEl) btnEl.classList.remove("btn--disabled");
+                                    if (rp && rp.status) {
+                                        showOk(statusEl, playerWins ? "You won " + winnings + " Minima!" : "House won. Better luck next time.");
+                                        MDS.notify(playerWins ? "You won!" : "House won.");
+                                        refreshBets(); refreshBalance();
+                                    } else {
+                                        showErr(statusEl, "Resolve failed: " + (rp ? rp.error : ""), txid);
+                                    }
+                                });
+                            });
+                        });
+                    };
+
+                    if (playerWins) {
+                        MDS.cmd("txnoutput id:" + txid + " amount:" + winnings + " address:" + playeraddr + " storestate:false", function(ro1) {
+                            if (!ro1.status) { showErr(statusEl, "payout output failed", txid); if (btnEl) btnEl.classList.remove("btn--disabled"); return; }
+                            var remainder = miniNum(totalAmt - winnings);
+                            if (remainder > 0.00001) {
+                                MDS.cmd("txnoutput id:" + txid + " amount:" + remainder + " address:" + houseaddr + " storestate:false", function(ro2) {
+                                    if (!ro2.status) { showErr(statusEl, "remainder output failed", txid); if (btnEl) btnEl.classList.remove("btn--disabled"); return; }
+                                    afterOutputs();
+                                });
+                            } else { afterOutputs(); }
+                        });
+                    } else {
+                        MDS.cmd("txnoutput id:" + txid + " amount:" + totalAmt + " address:" + houseaddr + " storestate:false", function(ro1) {
+                            if (!ro1.status) { showErr(statusEl, "payout output failed", txid); if (btnEl) btnEl.classList.remove("btn--disabled"); return; }
+                            afterOutputs();
+                        });
+                    }
+                });
+            });
+        });
+    });
+}
+
+// ===== Claim Timeout (E1: phase 1 player claims, E2: phase 2 house claims) =====
+function claimTimeout(coinid, statusId, btnEl) {
+    var coin = BETS.find(function(c) { return c.coinid === coinid; });
+    if (!coin) return;
+    if (btnEl) btnEl.classList.add("btn--disabled");
     var txid = "timeout_" + Date.now();
     var statusEl = document.getElementById(statusId || "myBetsStatus");
-    statusEl.className = "status"; statusEl.innerText = "Claiming...";
+    statusEl.className = "status"; statusEl.innerText = "Claiming timeout...";
 
     MDS.cmd("txncreate id:" + txid, function(r0) {
-        if (!r0.status) { showErr(statusEl, "txncreate failed"); return; }
+        if (!r0.status) { showErr(statusEl, "txncreate failed"); if (btnEl) btnEl.classList.remove("btn--disabled"); return; }
         MDS.cmd("txninput id:" + txid + " coinid:" + coinid, function(r1) {
-            if (!r1.status) { showErr(statusEl, "input failed", txid); return; }
+            if (!r1.status) { showErr(statusEl, "input failed", txid); if (btnEl) btnEl.classList.remove("btn--disabled"); return; }
             MDS.cmd("txnoutput id:" + txid + " amount:" + coin.amount + " address:" + MY_HEX_ADDR + " storestate:false", function(r2) {
-                if (!r2.status) { showErr(statusEl, "output failed", txid); return; }
+                if (!r2.status) { showErr(statusEl, "output failed", txid); if (btnEl) btnEl.classList.remove("btn--disabled"); return; }
                 MDS.cmd("txnsign id:" + txid + " publickey:auto", function(rs) {
                     if (isPending(rs)) {
-                        showPending(statusEl, "Timeout pending — approve in Pending Actions", txid);
+                        showPending(statusEl, "Timeout pending \u2014 approve in Pending Actions", txid);
                         return;
                     }
                     MDS.cmd("txnbasics id:" + txid + ";txnpost id:" + txid, function(resArr) {
                         var rp = Array.isArray(resArr) ? resArr[resArr.length - 1] : resArr;
+                        if (btnEl) btnEl.classList.remove("btn--disabled");
                         if (rp && rp.status) {
                             showOk(statusEl, "Timeout claimed!");
                             refreshBets(); refreshBalance();
@@ -746,9 +925,7 @@ function claimTimeout(coinid, statusId) {
     });
 }
 
-// ===== Auto-Process: house auto-resolves taken bets =====
-var AUTO_BUSY = {};
-
+// ===== Auto-Process: house auto-reveals, player auto-resolves =====
 function autoProcess() {
     if (!DB_READY || BETS.length === 0) return;
     for (var i = 0; i < BETS.length; i++) {
@@ -756,92 +933,20 @@ function autoProcess() {
         var phase = parseInt(getState(coin, 6)) || 0;
         var coinid = coin.coinid;
         if (AUTO_BUSY[coinid]) continue;
-        // I'm the house, bet is taken (phase 1) — auto-resolve
+
+        // House auto-reveals at phase 1
         if (phase === 1 && isMyKey(getState(coin, 0))) {
             AUTO_BUSY[coinid] = true;
-            doAutoResolve(coin);
+            doAutoReveal(coin);
+            break;
+        }
+        // Player auto-resolves at phase 2
+        if (phase === 2 && isMyKey(getState(coin, 8))) {
+            AUTO_BUSY[coinid] = true;
+            doPlayerResolve(coinid);
             break;
         }
     }
-}
-
-function doAutoResolve(coin) {
-    var coinid = coin.coinid;
-    var betCommit = getState(coin, 2);
-    MDS.log("AUTO-RESOLVE: " + coinid.substring(0, 16));
-
-    MDS.keypair.get("casino_secret_for_" + betCommit, function(sres) {
-        if (!sres.value) {
-            MDS.log("AUTO-RESOLVE: no secret for " + betCommit.substring(0,16));
-            delete AUTO_BUSY[coinid];
-            return;
-        }
-        var housesecret = sres.value;
-        var playersecret = getState(coin, 10);
-        var houseaddr = getState(coin, 1);
-        var playeraddr = getState(coin, 9);
-        var bet = getState(coin, 5);
-        var payout = parseInt(getState(coin, 4));
-        var range = parseInt(getState(coin, 3));
-        var playerpick = parseInt(getState(coin, 11));
-        var winnings = parseFloat(bet) * payout;
-        var totalAmt = parseFloat(coin.amount);
-        var remainder = totalAmt - winnings;
-
-        // Compute winner locally
-        var combined = housesecret + playersecret.substring(2);
-        MDS.cmd("hash data:" + combined, function(hres) {
-            var hash = extractResponse(hres);
-            if (!hash) { MDS.log("AUTO-RESOLVE hash failed"); delete AUTO_BUSY[coinid]; return; }
-            var num = parseInt(hash.substring(2, 10), 16);
-            var result = num % range;
-            var playerWins = (result === playerpick);
-            MDS.log("AUTO-RESOLVE: result=" + result + " pick=" + playerpick + " playerWins=" + playerWins);
-
-            var txid = "autoresolve_" + Date.now();
-            MDS.cmd("txncreate id:" + txid, function(r0) {
-                if (!r0.status) { MDS.log("AUTO-RESOLVE txncreate failed"); delete AUTO_BUSY[coinid]; return; }
-                MDS.cmd("txninput id:" + txid + " coinid:" + coinid, function(r1) {
-                    if (!r1.status) { MDS.cmd("txndelete id:" + txid); delete AUTO_BUSY[coinid]; return; }
-                    // Build outputs based on winner
-                    var afterOutputs = function() {
-                        MDS.cmd("txnstate id:" + txid + " port:12 value:" + housesecret, function() {
-                            MDS.cmd("txnsign id:" + txid + " publickey:" + getState(coin, 0), function(rs) {
-                                if (isPending(rs)) {
-                                    showPending(document.getElementById("myBetsStatus"), "Auto-resolve pending — approve in Pending Actions", txid, function(ok) {
-                                        delete AUTO_BUSY[coinid];
-                                        if (ok) refreshBets();
-                                    });
-                                    return;
-                                }
-                                MDS.cmd("txnbasics id:" + txid + ";txnpost id:" + txid, function(resArr) {
-                                    var rp = Array.isArray(resArr) ? resArr[resArr.length - 1] : resArr;
-                                    MDS.log("AUTO-RESOLVE posted: " + (rp ? rp.status : "null"));
-                                    if (rp && rp.status) {
-                                        MDS.notify(playerWins ? "Player won!" : "House won!");
-                                    } else {
-                                        MDS.log("AUTO-RESOLVE failed: " + (rp ? rp.error : ""));
-                                        MDS.cmd("txndelete id:" + txid);
-                                    }
-                                    delete AUTO_BUSY[coinid];
-                                    refreshBets(); refreshBalance();
-                                });
-                            });
-                        });
-                    };
-                    if (playerWins) {
-                        MDS.cmd("txnoutput id:" + txid + " amount:" + winnings + " address:" + playeraddr + " storestate:false", function() {
-                            if (remainder > 0.00001) {
-                                MDS.cmd("txnoutput id:" + txid + " amount:" + remainder + " address:" + houseaddr + " storestate:false", function() { afterOutputs(); });
-                            } else { afterOutputs(); }
-                        });
-                    } else {
-                        MDS.cmd("txnoutput id:" + txid + " amount:" + totalAmt + " address:" + houseaddr + " storestate:false", function() { afterOutputs(); });
-                    }
-                });
-            });
-        });
-    });
 }
 </script>
 </body>

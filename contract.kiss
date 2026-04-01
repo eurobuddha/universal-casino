@@ -1,5 +1,6 @@
-/* UNIVERSAL CASINO CONTRACT v1.0
- * 3-phase commit-reveal: create → take → auto-resolve
+/* UNIVERSAL CASINO CONTRACT v1.1
+ * 3-phase commit-reveal: create → take → reveal → resolve
+ * Fair odds: neither party can compute outcome before both secrets on-chain
  *
  * State layout:
  *   0  = House pubkey
@@ -8,79 +9,100 @@
  *   3  = Range (2=flip, 6=dice, 36=roulette)
  *   4  = Payout multiplier
  *   5  = Bet amount (what player stakes)
- *   6  = Phase: 0=open, 1=taken
+ *   6  = Phase: 0=open, 1=taken, 2=revealed
  *   7  = Timeout duration in blocks
  *   8  = Player pubkey
  *   9  = Player address
- *   10 = Player secret (revealed at take time — safe because house committed first)
+ *   10 = Player commit: SHA3(secret)
  *   11 = Player pick (0 to range-1)
+ *   -- phase 2 state (set by house reveal tx):
+ *   12 = House secret (revealed by house)
  *   -- resolve tx state only:
- *   12 = House secret (revealed by house to resolve)
+ *   13 = Player secret (revealed by player to resolve)
  *
  * Paths:
- *   A) House cancel     — phase=0, SIGNEDBY house
- *   B) Player take      — phase=0→1, player reveals secret + pick, VERIFYOUT recreate
- *   C) House resolve    — phase=1, SIGNEDBY house, reveal house secret, compute winner, pay out
- *   D) Player timeout   — phase=1, @COINAGE > timeout, SIGNEDBY player (reclaim all)
+ *   A)  House cancel     — phase=0, SIGNEDBY house
+ *   B)  Player take      — phase=0→1, player commits secret hash + pick, VERIFYOUT recreate
+ *   C)  House reveal     — phase=1→2, house reveals secret, VERIFYOUT recreate
+ *   D)  Player resolve   — phase=2, player reveals secret, compute winner, pay out
+ *   E1) Player timeout   — phase=1, @COINAGE > timeout (house ghosted)
+ *   E2) House timeout    — phase=2, @COINAGE > timeout (player ghosted)
  *
  * Randomness: SHA3(CONCAT(housesecret, playersecret)) → SUBSET(0,4) → NUMBER() % range
- * VERIFYOUT rules: phase transition (B) uses keepstate=TRUE, payouts (C) use keepstate=FALSE
+ * VERIFYOUT rules: phase transition uses keepstate=TRUE, payouts use keepstate=FALSE
  */
 
-/* ===== MINIFIED VERSION (deployed, 1124 chars target) ===== */
-/* See SCRIPT variable in index.html */
+/* ===== READABLE VERSION ===== */
 
-/* ===== READABLE VERSION (documentation) ===== */
+LET hpk = PREVSTATE(0)
+LET ha = PREVSTATE(1)
+LET hc = PREVSTATE(2)
+LET rng = PREVSTATE(3)
+LET po = PREVSTATE(4)
+LET bt = PREVSTATE(5)
+LET ph = PREVSTATE(6)
+LET to = PREVSTATE(7)
 
-LET housepk = PREVSTATE(0)
-LET houseaddr = PREVSTATE(1)
-LET housecommit = PREVSTATE(2)
-LET range = PREVSTATE(3)
-LET payout = PREVSTATE(4)
-LET bet = PREVSTATE(5)
-LET phase = PREVSTATE(6)
-LET timeout = PREVSTATE(7)
-
-/* A: House cancels */
-IF phase EQ 0 AND SIGNEDBY(housepk) THEN
-RETURN TRUE
+/* A: House cancels open bet */
+IF ph EQ 0 AND SIGNEDBY(hpk) THEN
+  RETURN TRUE
 ENDIF
 
-/* B: Player takes — reveal secret + pick, recreate coin at phase 1 */
-IF phase EQ 0 THEN
-ASSERT SAMESTATE(0 5)
-ASSERT STATE(6) EQ 1
-ASSERT STATE(7) EQ timeout
-LET pp = STATE(11)
-ASSERT pp GTE 0 AND pp LT range
-LET total = @AMOUNT + bet
-ASSERT VERIFYOUT(@INPUT @ADDRESS total @TOKENID TRUE)
-RETURN TRUE
+/* B: Player takes — commit secret hash + pick, add bet, recreate at phase 1 */
+IF ph EQ 0 THEN
+  ASSERT SAMESTATE(0 5)
+  ASSERT STATE(6) EQ 1
+  ASSERT STATE(7) EQ to
+  LET pp = STATE(11)
+  ASSERT pp GTE 0 AND pp LT rng
+  LET tt = @AMOUNT + bt
+  ASSERT VERIFYOUT(@INPUT @ADDRESS tt @TOKENID TRUE)
+  RETURN TRUE
 ENDIF
 
-/* C: House resolves — reveal secret, determine winner, pay out */
-IF phase EQ 1 AND SIGNEDBY(housepk) THEN
-LET hs = STATE(12)
-ASSERT SHA3(hs) EQ housecommit
-LET ps = PREVSTATE(10)
-LET h = SHA3(CONCAT(hs ps))
-LET r = NUMBER(SUBSET(0 4 h)) % range
+LET ppk = PREVSTATE(8)
+LET pa = PREVSTATE(9)
+LET pc = PREVSTATE(10)
 LET pk = PREVSTATE(11)
-IF r EQ pk THEN
-LET w = bet * payout
-ASSERT VERIFYOUT(@INPUT PREVSTATE(9) w @TOKENID FALSE)
-IF @AMOUNT GT w THEN
-ASSERT VERIFYOUT(@INPUT + 1 houseaddr @AMOUNT - w @TOKENID FALSE)
-ENDIF
-ELSE
-ASSERT VERIFYOUT(@INPUT houseaddr @AMOUNT @TOKENID FALSE)
-ENDIF
-RETURN TRUE
+
+/* C: House reveals — reveal secret, recreate at phase 2 */
+IF ph EQ 1 AND SIGNEDBY(hpk) THEN
+  ASSERT SAMESTATE(0 5)
+  ASSERT STATE(6) EQ 2
+  ASSERT SAMESTATE(7 11)
+  LET hs = STATE(12)
+  ASSERT SHA3(hs) EQ hc
+  ASSERT VERIFYOUT(@INPUT @ADDRESS @AMOUNT @TOKENID TRUE)
+  RETURN TRUE
 ENDIF
 
-/* D: Player timeout — house ghosted, player reclaims all */
-IF phase EQ 1 AND @COINAGE GT timeout AND SIGNEDBY(PREVSTATE(8)) THEN
-RETURN TRUE
+/* E1: Player timeout at phase 1 — house ghosted after player took */
+IF ph EQ 1 AND @COINAGE GT to AND SIGNEDBY(ppk) THEN
+  RETURN TRUE
+ENDIF
+
+/* D: Player resolves — reveal secret, determine winner, pay out */
+IF ph EQ 2 AND SIGNEDBY(ppk) THEN
+  LET ps = STATE(13)
+  ASSERT SHA3(ps) EQ pc
+  LET hs = PREVSTATE(12)
+  LET h = SHA3(CONCAT(hs ps))
+  LET r = NUMBER(SUBSET(0 4 h)) % rng
+  IF r EQ pk THEN
+    LET w = bt * po
+    ASSERT VERIFYOUT(@INPUT pa w @TOKENID FALSE)
+    IF @AMOUNT GT w THEN
+      ASSERT VERIFYOUT(@INPUT + 1 ha @AMOUNT - w @TOKENID FALSE)
+    ENDIF
+  ELSE
+    ASSERT VERIFYOUT(@INPUT ha @AMOUNT @TOKENID FALSE)
+  ENDIF
+  RETURN TRUE
+ENDIF
+
+/* E2: House timeout at phase 2 — player ghosted after house revealed */
+IF ph EQ 2 AND @COINAGE GT to AND SIGNEDBY(hpk) THEN
+  RETURN TRUE
 ENDIF
 
 RETURN FALSE
