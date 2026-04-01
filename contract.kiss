@@ -1,0 +1,86 @@
+/* UNIVERSAL CASINO CONTRACT v1.0
+ * 3-phase commit-reveal: create → take → auto-resolve
+ *
+ * State layout:
+ *   0  = House pubkey
+ *   1  = House address
+ *   2  = House commit: SHA3(secret)
+ *   3  = Range (2=flip, 6=dice, 36=roulette)
+ *   4  = Payout multiplier
+ *   5  = Bet amount (what player stakes)
+ *   6  = Phase: 0=open, 1=taken
+ *   7  = Timeout duration in blocks
+ *   8  = Player pubkey
+ *   9  = Player address
+ *   10 = Player secret (revealed at take time — safe because house committed first)
+ *   11 = Player pick (0 to range-1)
+ *   -- resolve tx state only:
+ *   12 = House secret (revealed by house to resolve)
+ *
+ * Paths:
+ *   A) House cancel     — phase=0, SIGNEDBY house
+ *   B) Player take      — phase=0→1, player reveals secret + pick, VERIFYOUT recreate
+ *   C) House resolve    — phase=1, SIGNEDBY house, reveal house secret, compute winner, pay out
+ *   D) Player timeout   — phase=1, @COINAGE > timeout, SIGNEDBY player (reclaim all)
+ *
+ * Randomness: SHA3(CONCAT(housesecret, playersecret)) → SUBSET(0,4) → NUMBER() % range
+ * VERIFYOUT rules: phase transition (B) uses keepstate=TRUE, payouts (C) use keepstate=FALSE
+ */
+
+/* ===== MINIFIED VERSION (deployed, 1124 chars target) ===== */
+/* See SCRIPT variable in index.html */
+
+/* ===== READABLE VERSION (documentation) ===== */
+
+LET housepk = PREVSTATE(0)
+LET houseaddr = PREVSTATE(1)
+LET housecommit = PREVSTATE(2)
+LET range = PREVSTATE(3)
+LET payout = PREVSTATE(4)
+LET bet = PREVSTATE(5)
+LET phase = PREVSTATE(6)
+LET timeout = PREVSTATE(7)
+
+/* A: House cancels */
+IF phase EQ 0 AND SIGNEDBY(housepk) THEN
+RETURN TRUE
+ENDIF
+
+/* B: Player takes — reveal secret + pick, recreate coin at phase 1 */
+IF phase EQ 0 THEN
+ASSERT SAMESTATE(0 5)
+ASSERT STATE(6) EQ 1
+ASSERT STATE(7) EQ timeout
+LET pp = STATE(11)
+ASSERT pp GTE 0 AND pp LT range
+LET total = @AMOUNT + bet
+ASSERT VERIFYOUT(@INPUT @ADDRESS total @TOKENID TRUE)
+RETURN TRUE
+ENDIF
+
+/* C: House resolves — reveal secret, determine winner, pay out */
+IF phase EQ 1 AND SIGNEDBY(housepk) THEN
+LET hs = STATE(12)
+ASSERT SHA3(hs) EQ housecommit
+LET ps = PREVSTATE(10)
+LET h = SHA3(CONCAT(hs ps))
+LET r = NUMBER(SUBSET(0 4 h)) % range
+LET pk = PREVSTATE(11)
+IF r EQ pk THEN
+LET w = bet * payout
+ASSERT VERIFYOUT(@INPUT PREVSTATE(9) w @TOKENID FALSE)
+IF @AMOUNT GT w THEN
+ASSERT VERIFYOUT(@INPUT + 1 houseaddr @AMOUNT - w @TOKENID FALSE)
+ENDIF
+ELSE
+ASSERT VERIFYOUT(@INPUT houseaddr @AMOUNT @TOKENID FALSE)
+ENDIF
+RETURN TRUE
+ENDIF
+
+/* D: Player timeout — house ghosted, player reclaims all */
+IF phase EQ 1 AND @COINAGE GT timeout AND SIGNEDBY(PREVSTATE(8)) THEN
+RETURN TRUE
+ENDIF
+
+RETURN FALSE
