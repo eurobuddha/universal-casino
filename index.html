@@ -537,7 +537,7 @@ body::after{
 
 <script>
 /* ============================================
-   UNIVERSAL CASINO v1.1.9
+   UNIVERSAL CASINO v1.2.0
    3-phase commit-reveal: create → take → reveal → resolve
    Fair odds — neither party can compute outcome early
    ============================================ */
@@ -902,7 +902,7 @@ function finishInit() {
     loadWalletKeys(function() {
         loadHistory(function() {
             DB_READY = true;
-            MDS.log("Casino v1.1.9 ready. Script=" + SCRIPT_ADDR + " Pub=" + MY_PUBKEY.substring(0,16) + "... Keys=" + Object.keys(MY_KEYS).length);
+            MDS.log("Casino v1.2.0 ready. Script=" + SCRIPT_ADDR + " Pub=" + MY_PUBKEY.substring(0,16) + "... Keys=" + Object.keys(MY_KEYS).length);
             refreshBets(); refreshBalance();
             updateSummary();
         });
@@ -1636,7 +1636,6 @@ function flashResult(playerWins, isHouse, game, amount, range, pickIdx, resultId
         '<div style="font-family:var(--sans);font-size:18px;font-weight:700;color:var(--text);margin-top:8px">' + game + ' \u2014 ' +
         (won ? '+' : '-') + amount + ' Minima</div>';
     overlay.style.display = "flex";
-    setTimeout(function() { overlay.style.display = "none"; }, 4000);
     overlay.onclick = function() { overlay.style.display = "none"; };
 }
 
