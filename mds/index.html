@@ -385,6 +385,75 @@ body::after{
   animation:resultPop .5s cubic-bezier(.2,.8,.3,1) forwards;
 }
 
+/* Roulette wheel animation */
+.roulette-scene{
+  display:flex;justify-content:center;align-items:center;
+  padding:20px 0 12px;
+}
+.roulette-wheel{
+  width:90px;height:90px;position:relative;
+  border-radius:50%;
+  border:3px solid var(--gold);
+  box-shadow:0 0 0 4px var(--gold-dim),0 4px 20px rgba(212,168,67,.3),inset 0 0 20px rgba(0,0,0,.3);
+  overflow:hidden;
+}
+.roulette-wheel--spinning{
+  animation:rouletteSpin 2.5s cubic-bezier(.2,0,.1,1) infinite;
+}
+.roulette-wheel--result{
+  animation:rouletteSettle .8s cubic-bezier(.2,.8,.3,1) forwards;
+}
+@keyframes rouletteSpin{
+  0%{transform:rotate(0deg)}
+  100%{transform:rotate(1080deg)}
+}
+@keyframes rouletteSettle{
+  0%{transform:rotate(720deg) scale(.85)}
+  70%{transform:rotate(0deg) scale(1.08)}
+  100%{transform:rotate(0deg) scale(1)}
+}
+.roulette-inner{
+  position:absolute;inset:0;border-radius:50%;
+  background:conic-gradient(
+    #c0392b 0deg,#1a1a1a 10deg,#c0392b 20deg,#1a1a1a 30deg,
+    #c0392b 40deg,#1a1a1a 50deg,#c0392b 60deg,#1a1a1a 70deg,
+    #c0392b 80deg,#1a1a1a 90deg,#c0392b 100deg,#1a1a1a 110deg,
+    #c0392b 120deg,#1a1a1a 130deg,#c0392b 140deg,#1a1a1a 150deg,
+    #c0392b 160deg,#1a1a1a 170deg,#c0392b 180deg,#1a1a1a 190deg,
+    #c0392b 200deg,#1a1a1a 210deg,#c0392b 220deg,#1a1a1a 230deg,
+    #c0392b 240deg,#1a1a1a 250deg,#c0392b 260deg,#1a1a1a 270deg,
+    #c0392b 280deg,#1a1a1a 290deg,#c0392b 300deg,#1a1a1a 310deg,
+    #c0392b 320deg,#1a1a1a 330deg,#c0392b 340deg,#1a1a1a 350deg,
+    #c0392b 360deg
+  );
+}
+.roulette-center{
+  position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);
+  width:30px;height:30px;border-radius:50%;
+  background:linear-gradient(145deg,var(--gold-light),var(--gold-dim));
+  border:2px solid var(--gold);
+  display:flex;align-items:center;justify-content:center;
+  font-family:var(--serif);font-size:11px;font-weight:900;color:var(--felt-dark);
+  z-index:1;
+  box-shadow:0 2px 8px rgba(0,0,0,.3);
+}
+.roulette-marker{
+  position:absolute;top:-2px;left:50%;transform:translateX(-50%);
+  width:0;height:0;
+  border-left:6px solid transparent;border-right:6px solid transparent;
+  border-top:10px solid var(--gold);
+  z-index:2;filter:drop-shadow(0 2px 3px rgba(0,0,0,.4));
+}
+.roulette-result{
+  position:absolute;inset:-4px;border-radius:50%;
+  display:flex;align-items:center;justify-content:center;
+  text-align:center;
+  font-family:var(--sans);font-size:10px;font-weight:800;
+  text-transform:uppercase;letter-spacing:.5px;
+  line-height:1.2;
+  animation:resultPop .5s cubic-bezier(.2,.8,.3,1) forwards;
+}
+
 /* TX ID display */
 .txid-row{
   margin-top:8px;display:flex;align-items:center;gap:6px;
@@ -468,7 +537,7 @@ body::after{
 
 <script>
 /* ============================================
-   UNIVERSAL CASINO v1.1.5
+   UNIVERSAL CASINO v1.1.6
    3-phase commit-reveal: create → take → reveal → resolve
    Fair odds — neither party can compute outcome early
    ============================================ */
@@ -653,6 +722,26 @@ function diceResultHTML(playerWins, isHouse) {
         '</div></div>';
 }
 
+function rouletteAnimHTML(spinning) {
+    return '<div class="roulette-scene"><div style="position:relative;display:inline-block">' +
+        '<div class="roulette-marker"></div>' +
+        '<div class="roulette-wheel' + (spinning ? ' roulette-wheel--spinning' : '') + '">' +
+        '<div class="roulette-inner"></div>' +
+        '<div class="roulette-center">\u25C9</div>' +
+        '</div></div></div>';
+}
+
+function rouletteResultHTML(playerWins, isHouse) {
+    var won = (playerWins && !isHouse) || (!playerWins && isHouse);
+    var label = won ? 'YOU<br>WIN' : 'YOU<br>LOSE';
+    var cls = won ? 'coin-result--win' : 'coin-result--lose';
+    return '<div class="roulette-scene"><div style="position:relative;display:inline-block">' +
+        '<div class="roulette-wheel roulette-wheel--result">' +
+        '<div class="roulette-inner"></div>' +
+        '<div class="roulette-result ' + cls + '">' + label + '</div>' +
+        '</div></div></div>';
+}
+
 function coinResultHTML(playerWins, isHouse) {
     var won = (playerWins && !isHouse) || (!playerWins && isHouse);
     var label = won ? 'YOU<br>WIN' : 'YOU<br>LOSE';
@@ -783,7 +872,7 @@ function finishInit() {
     loadWalletKeys(function() {
         loadHistory(function() {
             DB_READY = true;
-            MDS.log("Casino v1.1.5 ready. Script=" + SCRIPT_ADDR + " Pub=" + MY_PUBKEY.substring(0,16) + "... Keys=" + Object.keys(MY_KEYS).length);
+            MDS.log("Casino v1.1.6 ready. Script=" + SCRIPT_ADDR + " Pub=" + MY_PUBKEY.substring(0,16) + "... Keys=" + Object.keys(MY_KEYS).length);
             refreshBets(); refreshBalance();
             updateSummary();
         });
@@ -960,6 +1049,7 @@ function renderMyBets() {
         // Game animation for phases 1-2
         if (range == 2 && phase >= 1) html += coinAnimHTML(true);
         if (range == 6 && phase >= 1) html += diceAnimHTML(true);
+        if (range == 36 && phase >= 1) html += rouletteAnimHTML(true);
 
         html += '<div class="divider"></div>';
         html += '<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">';
@@ -1313,7 +1403,7 @@ function doPlayerResolve(coinid, statusId, btnEl) {
                                         });
                                         if (RESOLVED_BETS.length > 50) RESOLVED_BETS.pop();
                                         saveHistory();
-                                        flashResult(playerWins, isHouse, gt.name, playerWins ? winnings : bet);
+                                        flashResult(playerWins, isHouse, gt.name, playerWins ? winnings : bet, range, playerpick, result);
                                         MDS.notify(playerWins ? "You won " + winnings + " Minima!" : "House won.");
                                         refreshBets(); refreshBalance();
                                     } else {
@@ -1398,7 +1488,9 @@ function renderHistory() {
         var amt = won ? rb.winnings : rb.bet;
         html += '<div style="display:flex;align-items:center;gap:10px;padding:10px 12px;border-bottom:1px solid var(--border)">';
         html += '<span style="font-size:18px">' + (rb.range == 2 ? '\u00A4' : rb.range == 6 ? '\u2680' : '\u25C9') + '</span>';
-        html += '<span style="flex:1;font-size:13px;font-weight:600">' + rb.game + ' <span style="color:var(--text-dim);font-weight:400">as ' + rb.role + '</span></span>';
+        html += '<span style="flex:1;font-size:13px;font-weight:600">' + rb.game + ' <span style="color:var(--text-dim);font-weight:400">as ' + rb.role + '</span>';
+        html += '<br><span style="font-size:11px;color:var(--text-dim);font-weight:400">Picked: ' + esc(rb.pickLabel) + ' \u2192 Result: ' + esc(rb.resultLabel) + '</span>';
+        html += '</span>';
         html += '<span style="font-family:var(--mono);font-size:13px;font-weight:800;color:' + color + '">' + sign + amt + '</span>';
         html += '</div>';
         if (rb.txid) {
@@ -1411,18 +1503,32 @@ function renderHistory() {
 }
 
 // ===== Result Flash =====
-function flashResult(playerWins, isHouse, game, amount) {
+function flashResult(playerWins, isHouse, game, amount, range, pickIdx, resultIdx) {
     var won = (playerWins && !isHouse) || (!playerWins && isHouse);
     var overlay = document.getElementById("resultFlash");
     var inner = document.getElementById("resultFlashInner");
     var color = won ? '#22c55e' : '#ef4444';
     var glow = won ? 'rgba(34,197,94,.4)' : 'rgba(239,68,68,.4)';
+
+    // Build result detail line
+    var detail = '';
+    if (range == 2) {
+        var resultName = resultIdx === 0 ? 'Even' : 'Odd';
+        var pickName = pickIdx === 0 ? 'Even' : 'Odd';
+        detail = 'Result: <b>' + resultName + '</b> \u2014 You picked: <b>' + pickName + '</b>';
+    } else if (range == 6) {
+        detail = 'Rolled: <b>' + (resultIdx + 1) + '</b> \u2014 You picked: <b>' + (pickIdx + 1) + '</b>';
+    } else if (range == 36) {
+        detail = 'Ball landed on: <b>' + (resultIdx + 1) + '</b> \u2014 You picked: <b>' + (pickIdx + 1) + '</b>';
+    }
+
     inner.innerHTML = '<div style="font-family:var(--serif);font-size:48px;font-weight:900;color:' + color + ';text-shadow:0 0 40px ' + glow + '">' +
         (won ? 'YOU WIN' : 'YOU LOSE') + '</div>' +
+        '<div style="font-family:var(--sans);font-size:16px;font-weight:600;color:var(--text-dim);margin-top:6px">' + detail + '</div>' +
         '<div style="font-family:var(--sans);font-size:18px;font-weight:700;color:var(--text);margin-top:8px">' + game + ' \u2014 ' +
         (won ? '+' : '-') + amount + ' Minima</div>';
     overlay.style.display = "flex";
-    setTimeout(function() { overlay.style.display = "none"; }, 3000);
+    setTimeout(function() { overlay.style.display = "none"; }, 4000);
     overlay.onclick = function() { overlay.style.display = "none"; };
 }
 
