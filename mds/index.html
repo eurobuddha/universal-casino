@@ -421,6 +421,7 @@ body::after{
     <button class="tab tab--active" data-view="play">Play</button>
     <button class="tab" data-view="house">Be House</button>
     <button class="tab" data-view="mybets">My Bets</button>
+    <button class="tab" data-view="history">History</button>
   </nav>
 
   <!-- PLAY -->
@@ -452,11 +453,22 @@ body::after{
     <div id="myBetsList"><div class="empty">No active bets</div></div>
   </section>
 
+  <!-- HISTORY -->
+  <section id="view-history" class="view">
+    <h2 class="view__title">History</h2>
+    <div id="historyList"><div class="empty">No completed bets yet</div></div>
+  </section>
+
+</div>
+
+<!-- Result flash overlay -->
+<div id="resultFlash" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;z-index:1000;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,.6);backdrop-filter:blur(4px)">
+  <div id="resultFlashInner" style="text-align:center;animation:resultPop .5s cubic-bezier(.2,.8,.3,1) forwards"></div>
 </div>
 
 <script>
 /* ============================================
-   UNIVERSAL CASINO v1.1.3
+   UNIVERSAL CASINO v1.1.4
    3-phase commit-reveal: create → take → reveal → resolve
    Fair odds — neither party can compute outcome early
    ============================================ */
@@ -481,6 +493,7 @@ var SELECTED_PRESET = "flip";
 var CARD_PICKS = {};
 var PENDING_TXS = {};
 var AUTO_BUSY = {};
+var TAKING = {};  // coinid → true while take is in flight (prevents double-take)
 var RESOLVED_BETS = [];  // {coinid, role, game, pick, result, playerWins, winnings, amount, txid, time}
 
 // ===== Helpers =====
@@ -644,6 +657,15 @@ function txidRowHTML(txid) {
         '<span class="txid-row__copy">Copy</span></div>';
 }
 
+function switchTab(viewName) {
+    document.querySelectorAll(".tab").forEach(function(x) { x.classList.remove("tab--active"); });
+    document.querySelectorAll(".view").forEach(function(v) { v.classList.remove("view--active"); });
+    var tab = document.querySelector('[data-view="' + viewName + '"]');
+    if (tab) tab.classList.add("tab--active");
+    var view = document.getElementById("view-" + viewName);
+    if (view) view.classList.add("view--active");
+}
+
 function copyTxid(txid, el) {
     if (navigator.clipboard) {
         navigator.clipboard.writeText(txid);
@@ -747,7 +769,7 @@ function loadWalletKeys(callback) {
 function finishInit() {
     loadWalletKeys(function() {
         DB_READY = true;
-        MDS.log("Casino v1.1.3 ready. Script=" + SCRIPT_ADDR + " Pub=" + MY_PUBKEY.substring(0,16) + "... Keys=" + Object.keys(MY_KEYS).length);
+        MDS.log("Casino v1.1.4 ready. Script=" + SCRIPT_ADDR + " Pub=" + MY_PUBKEY.substring(0,16) + "... Keys=" + Object.keys(MY_KEYS).length);
         refreshBets(); refreshBalance();
         updateSummary();
     });
@@ -848,7 +870,7 @@ function refreshBets() {
 function renderOpenBets() {
     var el = document.getElementById("openBets");
     var open = BETS.filter(function(c) {
-        return parseInt(getState(c, 6)) === 0 && !isMyKey(getState(c, 0));
+        return parseInt(getState(c, 6)) === 0 && !isMyKey(getState(c, 0)) && !TAKING[c.coinid];
     });
     if (open.length === 0) { el.innerHTML = '<div class="empty">No open bets right now</div>'; return; }
     var html = "";
@@ -952,21 +974,8 @@ function renderMyBets() {
         html += '</div>';
     });
 
-    // Show resolved bets (results that are no longer on-chain)
-    RESOLVED_BETS.forEach(function(rb) {
-        var gt = gameType(rb.range);
-        var won = rb.playerWins ? (rb.role === 'Player') : (rb.role === 'House');
-        html += '<div class="card" style="border-color:' + (won ? 'rgba(74,222,128,.3)' : 'rgba(248,113,113,.3)') + '">';
-        html += '<div class="card-row"><span class="badge ' + gt.badge + '">' + rb.game + '</span><span class="badge ' + (won ? 'badge--open' : 'badge--reveal') + '">' + (won ? 'Won' : 'Lost') + '</span></div>';
-        html += '<div class="card-row"><span class="info">Role: <b>' + rb.role + '</b></span><span class="info" style="color:' + (won ? 'var(--green)' : 'var(--red)') + ';font-weight:800">' + (won ? '+' + rb.winnings : '-' + rb.bet) + ' Minima</span></div>';
-        html += '<div class="card-row"><span class="info">Pick: <b>' + rb.pickLabel + '</b> | Result: <b>' + rb.resultLabel + '</b></span></div>';
-        if (rb.range == 2) html += coinResultHTML(rb.playerWins, rb.role === 'House');
-        if (rb.range == 6) html += diceResultHTML(rb.playerWins, rb.role === 'House');
-        if (rb.txid) html += txidRowHTML(rb.txid);
-        html += '</div>';
-    });
-
     el.innerHTML = html;
+    renderHistory();
 }
 
 // ===== Create Bet =====
@@ -1054,9 +1063,11 @@ function cancelBet(coinid, statusId, btnEl) {
 
 // ===== Take Bet (Path B: phase 0\u21921, player commits secret hash + pick) =====
 function takeBet(coinid, statusId, btnEl) {
+    if (TAKING[coinid]) return;  // already in flight
     if (!MY_PUBKEY || !MY_HEX_ADDR) { showErr(document.getElementById(statusId), "Identity not loaded"); return; }
     var coin = BETS.find(function(c) { return c.coinid === coinid; });
     if (!coin) return;
+    TAKING[coinid] = true;
     if (btnEl) btnEl.classList.add("btn--disabled");
     var bet = getState(coin, 5);
     var total = miniNum(parseFloat(coin.amount) + parseFloat(bet));
@@ -1067,24 +1078,24 @@ function takeBet(coinid, statusId, btnEl) {
 
     MDS.cmd("random", function(rres) {
         var secret = extractResponse(rres);
-        if (!secret) { showErr(statusEl, "Random failed"); if (btnEl) btnEl.classList.remove("btn--disabled"); return; }
+        if (!secret) { showErr(statusEl, "Random failed"); delete TAKING[coinid]; return; }
 
         MDS.cmd("hash data:" + secret, function(hres) {
             var commit = extractResponse(hres);
-            if (!commit) { showErr(statusEl, "Hash failed"); if (btnEl) btnEl.classList.remove("btn--disabled"); return; }
+            if (!commit) { showErr(statusEl, "Hash failed"); delete TAKING[coinid]; return; }
 
             MDS.keypair.set("casino_psecret_for_" + commit, secret, function() {
                 findCoins("0x00", parseFloat(bet), coinid, function(result) {
-                    if (!result) { showErr(statusEl, "Insufficient Minima (need " + bet + ")"); if (btnEl) btnEl.classList.remove("btn--disabled"); return; }
+                    if (!result) { showErr(statusEl, "Insufficient Minima (need " + bet + ")"); delete TAKING[coinid]; return; }
                     statusEl.innerText = "Building transaction...";
                     MDS.cmd("txncreate id:" + txid, function(r0) {
-                        if (!r0.status) { showErr(statusEl, "txncreate failed", txid); if (btnEl) btnEl.classList.remove("btn--disabled"); return; }
+                        if (!r0.status) { showErr(statusEl, "txncreate failed", txid); delete TAKING[coinid]; return; }
                         MDS.cmd("txninput id:" + txid + " coinid:" + coinid, function(r1) {
-                            if (!r1.status) { showErr(statusEl, "contract input failed", txid); if (btnEl) btnEl.classList.remove("btn--disabled"); return; }
+                            if (!r1.status) { showErr(statusEl, "contract input failed", txid); delete TAKING[coinid]; return; }
                             addMultipleInputs(txid, result.coins, 0, function(ok) {
-                                if (!ok) { showErr(statusEl, "fund input failed", txid); if (btnEl) btnEl.classList.remove("btn--disabled"); return; }
+                                if (!ok) { showErr(statusEl, "fund input failed", txid); delete TAKING[coinid]; return; }
                                 MDS.cmd("txnoutput id:" + txid + " amount:" + total + " address:" + SCRIPT_ADDR + " storestate:true", function(r3) {
-                                    if (!r3.status) { showErr(statusEl, "output failed", txid); if (btnEl) btnEl.classList.remove("btn--disabled"); return; }
+                                    if (!r3.status) { showErr(statusEl, "output failed", txid); delete TAKING[coinid]; return; }
                                     var change = miniNum(result.total - parseFloat(bet));
                                     var afterChange = function() {
                                         var states = [
@@ -1100,19 +1111,24 @@ function takeBet(coinid, statusId, btnEl) {
                                             MDS.cmd("txnsign id:" + txid + " publickey:auto", function(rs) {
                                                 if (isPending(rs)) {
                                                     showPending(statusEl, "Approve in Pending Actions to take this bet", txid, function(ok2) {
-                                                        if (ok2) { showOk(statusEl, "Bet taken! Waiting for house to reveal..."); refreshBets(); }
-                                                        if (btnEl) btnEl.classList.remove("btn--disabled");
+                                                        if (ok2) {
+                                                            switchTab("mybets");
+                                                            MDS.notify("Bet taken!");
+                                                            refreshBets(); refreshBalance();
+                                                        } else {
+                                                            delete TAKING[coinid];
+                                                        }
                                                     });
                                                     return;
                                                 }
                                                 MDS.cmd("txnbasics id:" + txid + ";txnpost id:" + txid, function(resArr) {
                                                     var rp = Array.isArray(resArr) ? resArr[resArr.length - 1] : resArr;
-                                                    if (btnEl) btnEl.classList.remove("btn--disabled");
                                                     if (rp && rp.status) {
-                                                        showOk(statusEl, "Bet taken! Waiting for house to reveal...");
                                                         MDS.notify("Bet taken!");
-                                                        setTimeout(function() { refreshBets(); refreshBalance(); }, 3000);
+                                                        switchTab("mybets");
+                                                        setTimeout(function() { refreshBets(); refreshBalance(); }, 2000);
                                                     } else {
+                                                        delete TAKING[coinid];
                                                         showErr(statusEl, "Post failed: " + (rp ? rp.error : ""), txid);
                                                     }
                                                 });
@@ -1121,7 +1137,7 @@ function takeBet(coinid, statusId, btnEl) {
                                     };
                                     if (change > 0.000001) {
                                         MDS.cmd("txnoutput id:" + txid + " amount:" + change + " address:" + MY_HEX_ADDR + " storestate:false", function(rc) {
-                                            if (!rc.status) { showErr(statusEl, "change output failed", txid); if (btnEl) btnEl.classList.remove("btn--disabled"); return; }
+                                            if (!rc.status) { showErr(statusEl, "change output failed", txid); delete TAKING[coinid]; return; }
                                             afterChange();
                                         });
                                     } else { afterChange(); }
@@ -1266,8 +1282,9 @@ function doPlayerResolve(coinid, statusId, btnEl) {
                                             bet: bet, amount: totalAmt, txid: postTxid,
                                             time: Date.now()
                                         });
-                                        if (RESOLVED_BETS.length > 20) RESOLVED_BETS.pop();
-                                        if (statusEl) showOk(statusEl, playerWins ? "You won " + winnings + " Minima!" : "House won. Better luck next time.");
+                                        if (RESOLVED_BETS.length > 50) RESOLVED_BETS.pop();
+                                        var isH = isMyKey(getState(coin, 0));
+                                        flashResult(playerWins, isH, gt.name, playerWins ? winnings : bet);
                                         MDS.notify(playerWins ? "You won " + winnings + " Minima!" : "House won.");
                                         refreshBets(); refreshBalance();
                                     } else {
@@ -1338,6 +1355,48 @@ function claimTimeout(coinid, statusId, btnEl) {
 }
 
 // ===== Auto-Process =====
+// ===== History Tab =====
+function renderHistory() {
+    var el = document.getElementById("historyList");
+    var tabEl = document.querySelector('[data-view="history"]');
+    if (tabEl) tabEl.innerText = "History" + (RESOLVED_BETS.length ? " (" + RESOLVED_BETS.length + ")" : "");
+    if (RESOLVED_BETS.length === 0) { el.innerHTML = '<div class="empty">No completed bets yet</div>'; return; }
+    var html = "";
+    RESOLVED_BETS.forEach(function(rb) {
+        var won = rb.playerWins ? (rb.role === 'Player') : (rb.role === 'House');
+        var color = won ? 'var(--green)' : 'var(--red)';
+        var sign = won ? '+' : '-';
+        var amt = won ? rb.winnings : rb.bet;
+        html += '<div style="display:flex;align-items:center;gap:10px;padding:10px 12px;border-bottom:1px solid var(--border)">';
+        html += '<span style="font-size:18px">' + (rb.range == 2 ? '\u00A4' : rb.range == 6 ? '\u2680' : '\u25C9') + '</span>';
+        html += '<span style="flex:1;font-size:13px;font-weight:600">' + rb.game + ' <span style="color:var(--text-dim);font-weight:400">as ' + rb.role + '</span></span>';
+        html += '<span style="font-family:var(--mono);font-size:13px;font-weight:800;color:' + color + '">' + sign + amt + '</span>';
+        html += '</div>';
+        if (rb.txid) {
+            html += '<div style="padding:2px 12px 8px">';
+            html += txidRowHTML(rb.txid);
+            html += '</div>';
+        }
+    });
+    el.innerHTML = '<div class="card" style="padding:0;overflow:hidden">' + html + '</div>';
+}
+
+// ===== Result Flash =====
+function flashResult(playerWins, isHouse, game, amount) {
+    var won = (playerWins && !isHouse) || (!playerWins && isHouse);
+    var overlay = document.getElementById("resultFlash");
+    var inner = document.getElementById("resultFlashInner");
+    var color = won ? '#22c55e' : '#ef4444';
+    var glow = won ? 'rgba(34,197,94,.4)' : 'rgba(239,68,68,.4)';
+    inner.innerHTML = '<div style="font-family:var(--serif);font-size:48px;font-weight:900;color:' + color + ';text-shadow:0 0 40px ' + glow + '">' +
+        (won ? 'YOU WIN' : 'YOU LOSE') + '</div>' +
+        '<div style="font-family:var(--sans);font-size:18px;font-weight:700;color:var(--text);margin-top:8px">' + game + ' \u2014 ' +
+        (won ? '+' : '-') + amount + ' Minima</div>';
+    overlay.style.display = "flex";
+    setTimeout(function() { overlay.style.display = "none"; }, 3000);
+    overlay.onclick = function() { overlay.style.display = "none"; };
+}
+
 function autoProcess() {
     if (!DB_READY || BETS.length === 0) return;
     for (var i = 0; i < BETS.length; i++) {
