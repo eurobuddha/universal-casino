@@ -587,6 +587,7 @@ body::after{
       </div>
     </div>
     <button class="mute-btn" id="muteBtn" onclick="toggleMute()">SND:ON</button>
+    <button class="mute-btn" onclick="exitCasino()">EXIT</button>
   </header>
 
   <nav class="tabs">
@@ -640,7 +641,7 @@ body::after{
 
 <script>
 /* ============================================
-   UNIVERSAL CASINO v1.2.1
+   UNIVERSAL CASINO v1.2.2
    3-phase commit-reveal: create → take → reveal → resolve
    Fair odds — neither party can compute outcome early
    ============================================ */
@@ -1005,7 +1006,7 @@ function finishInit() {
     loadWalletKeys(function() {
         loadHistory(function() {
             DB_READY = true;
-            MDS.log("Casino v1.2.1 ready. Script=" + SCRIPT_ADDR + " Pub=" + MY_PUBKEY.substring(0,16) + "... Keys=" + Object.keys(MY_KEYS).length);
+            MDS.log("Casino v1.2.2 ready. Script=" + SCRIPT_ADDR + " Pub=" + MY_PUBKEY.substring(0,16) + "... Keys=" + Object.keys(MY_KEYS).length);
             MDS.keypair.get('casino_muted', function(mr) {
                 if (mr.status && mr.value === '1') { AUDIO_MUTED = true; document.getElementById('muteBtn').innerText = 'SND:OFF'; }
             });
@@ -1875,6 +1876,30 @@ function stopChiptune() {
     CURRENT_NODES.forEach(function(n) { try { n.disconnect(); } catch(e) {} });
     CURRENT_NODES = [];
 }
+
+function exitCasino() {
+    MDS.cmd('newscript script:"' + SCRIPT + '" track:false');
+    var count = 0;
+    BETS.forEach(function(c) {
+        var amHouse = isMyKey(getState(c, 0)), amPlayer = isMyKey(getState(c, 8));
+        if (!amHouse && !amPlayer) {
+            MDS.cmd("cointrack enable:false coinid:" + c.coinid);
+            count++;
+        }
+    });
+    MDS.log("Casino: exit — untracked " + count + " foreign coins, tracking disabled");
+    document.getElementById("exitModal").style.display = "flex";
+}
 </script>
+
+<div id="exitModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:200;align-items:center;justify-content:center">
+  <div style="background:var(--surface);border:2px solid var(--border);border-radius:var(--radius);padding:28px 24px;max-width:380px;width:90%;box-shadow:0 8px 32px rgba(0,0,0,.3)">
+    <h3 style="font-size:16px;font-weight:700;margin-bottom:14px;color:var(--text-bright)">Tracking Cleared</h3>
+    <p style="font-size:14px;line-height:1.5;color:var(--text);margin-bottom:10px">All casino coins have been untracked from your node. They will no longer appear as locked in your wallet.</p>
+    <p style="font-size:14px;line-height:1.5;color:var(--text);margin-bottom:10px">Your own bets are unaffected.</p>
+    <p style="font-size:13px;color:var(--text-dim);margin-bottom:16px">Tracking resumes next time you open the Casino. The game list may take a block to repopulate.</p>
+    <button onclick="document.getElementById('exitModal').style.display='none'" style="width:100%;padding:10px;background:var(--surface-alt);border:1px solid var(--border);border-radius:var(--radius);color:var(--text);cursor:pointer;font-weight:600;font-size:14px">OK</button>
+  </div>
+</div>
 </body>
 </html>
