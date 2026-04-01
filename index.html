@@ -537,7 +537,7 @@ body::after{
 
 <script>
 /* ============================================
-   UNIVERSAL CASINO v1.1.8
+   UNIVERSAL CASINO v1.1.9
    3-phase commit-reveal: create → take → reveal → resolve
    Fair odds — neither party can compute outcome early
    ============================================ */
@@ -640,13 +640,15 @@ function clearPendingStatus() {
 // Resolve pending results on NEWBALANCE — check if coins arrived at our address
 function resolvePendingResults() {
     if (PENDING_RESULTS.length === 0) return;
-    MDS.cmd("coins relevant:true sendable:true tokenid:0x00", function(res) {
+    MDS.cmd("coins relevant:true tokenid:0x00", function(res) {
         if (!res.status || !res.response) return;
+        // Only wallet coins (no state = not at a script address)
+        var walletCoins = res.response.filter(function(c) { return !c.state || c.state.length === 0; });
         var toRemove = [];
         PENDING_RESULTS.forEach(function(pr, idx) {
-            // Timeout: if pending for > 60 seconds, just record as unknown
             var age = Date.now() - pr.time;
             if (age < 3000) return; // wait at least 3 seconds for confirmation
+            var timedOut = age > 120000; // after 2 minutes, record as best-guess
             var alreadyRecorded = RESOLVED_BETS.some(function(rb) { return rb.coinid === pr.coinid; });
             if (alreadyRecorded) { toRemove.push(idx); return; }
             // For house: check if we received a coin ≈ pot amount (house won) or not (house lost)
@@ -658,7 +660,7 @@ function resolvePendingResults() {
                 // House loses: gets nothing for fair odds
                 // Check if any recent coin ≈ pot amount exists
                 var potAmt = parseFloat(pr.amount);
-                var foundPot = res.response.some(function(c) {
+                var foundPot = walletCoins.some(function(c) {
                     return Math.abs(parseFloat(c.amount) - potAmt) < 0.001;
                 });
                 iWon = foundPot;
@@ -666,7 +668,7 @@ function resolvePendingResults() {
             } else {
                 // Player fallback — if we got paid, we won
                 var winAmt = miniNum(parseFloat(pr.bet) * pr.payout);
-                var foundWin = res.response.some(function(c) {
+                var foundWin = walletCoins.some(function(c) {
                     return Math.abs(parseFloat(c.amount) - winAmt) < 0.001;
                 });
                 iWon = foundWin;
@@ -900,7 +902,7 @@ function finishInit() {
     loadWalletKeys(function() {
         loadHistory(function() {
             DB_READY = true;
-            MDS.log("Casino v1.1.8 ready. Script=" + SCRIPT_ADDR + " Pub=" + MY_PUBKEY.substring(0,16) + "... Keys=" + Object.keys(MY_KEYS).length);
+            MDS.log("Casino v1.1.9 ready. Script=" + SCRIPT_ADDR + " Pub=" + MY_PUBKEY.substring(0,16) + "... Keys=" + Object.keys(MY_KEYS).length);
             refreshBets(); refreshBalance();
             updateSummary();
         });
@@ -1042,6 +1044,11 @@ function refreshBets() {
             BETS.forEach(function(c) { if (c.coinid === id) found = true; });
             if (!found) delete AUTO_BUSY[id];
         });
+        // Clean up TAKING: remove entries for coins that transitioned away from phase 0
+        Object.keys(TAKING).forEach(function(id) {
+            var coin = BETS.find(function(c) { return c.coinid === id; });
+            if (!coin || parseInt(getState(coin, 6)) !== 0) delete TAKING[id];
+        });
         renderOpenBets();
         renderMyBets();
     });
@@ -1051,11 +1058,12 @@ function refreshBets() {
 function renderOpenBets() {
     var el = document.getElementById("openBets");
     var open = BETS.filter(function(c) {
-        return parseInt(getState(c, 6)) === 0 && !isMyKey(getState(c, 0)) && !TAKING[c.coinid];
+        return parseInt(getState(c, 6)) === 0 && !isMyKey(getState(c, 0));
     });
     if (open.length === 0) { el.innerHTML = '<div class="empty">No open bets right now</div>'; return; }
     var html = "";
     open.forEach(function(coin) {
+        var isTaking = TAKING[coin.coinid];
         var range = parseInt(getState(coin, 3)) || 2;
         var payout = parseInt(getState(coin, 4)) || 2;
         var bet = getState(coin, 5) || "0";
@@ -1079,8 +1087,12 @@ function renderOpenBets() {
             html += '<div class="pick' + (currentPick==p ? ' pick--active' : '') + '" onclick="CARD_PICKS[\'' + safeCoinId + '\']=' + p + ';renderOpenBets()">' + label + '</div>';
         }
         html += '</div>';
-        html += '<button class="btn btn--green btn--full" id="btn_' + statusId + '" onclick="takeBet(\'' + safeCoinId + '\',\'' + statusId + '\',this)">Take Bet \u2014 ' + bet + ' Minima</button>';
-        html += '<div class="bet-status" id="' + statusId + '"></div>';
+        if (isTaking) {
+            html += '<div class="bet-status bet-status--ok">Bet taken! Waiting for chain confirmation...</div>';
+        } else {
+            html += '<button class="btn btn--green btn--full" id="btn_' + statusId + '" onclick="takeBet(\'' + safeCoinId + '\',\'' + statusId + '\',this)">Take Bet \u2014 ' + esc(bet) + ' Minima</button>';
+            html += '<div class="bet-status" id="' + statusId + '"></div>';
+        }
         html += '</div>';
     });
     el.innerHTML = html;
@@ -1094,8 +1106,12 @@ function renderMyBets() {
     });
     var tabEl = document.querySelector('[data-view="mybets"]');
     if (tabEl) tabEl.innerText = "My Bets" + (mine.length ? " (" + mine.length + ")" : "");
-    if (mine.length === 0) { el.innerHTML = '<div class="empty">No active bets</div>'; return; }
+    var hasPendingTakes = Object.keys(TAKING).length > 0;
+    if (mine.length === 0 && !hasPendingTakes) { el.innerHTML = '<div class="empty">No active bets</div>'; return; }
     var html = "";
+    if (hasPendingTakes) {
+        html += '<div class="card" style="text-align:center;border-color:var(--warn-bg)"><span class="info" style="color:var(--warn);font-weight:700">Bet taken! It can take up to 3 blocks (~3 minutes) for your bet to appear here.</span></div>';
+    }
     mine.forEach(function(coin) {
         var phase = parseInt(getState(coin, 6)) || 0;
         var range = parseInt(getState(coin, 3)) || 2;
@@ -1294,11 +1310,13 @@ function takeBet(coinid, statusId, btnEl) {
                                             MDS.cmd("txnsign id:" + txid + " publickey:auto", function(rs) {
                                                 if (isPending(rs)) {
                                                     showPending(statusEl, "Approve in Pending Actions to take this bet", txid, function(ok2) {
-                                                        delete TAKING[coinid];
                                                         if (ok2) {
-                                                            switchTab("mybets");
                                                             MDS.notify("Bet taken!");
+                                                            switchTab("mybets");
                                                             refreshBets(); refreshBalance();
+                                                        } else {
+                                                            delete TAKING[coinid];
+                                                            renderOpenBets();
                                                         }
                                                     });
                                                     return;
@@ -1306,9 +1324,9 @@ function takeBet(coinid, statusId, btnEl) {
                                                 MDS.cmd("txnbasics id:" + txid + ";txnpost id:" + txid, function(resArr) {
                                                     var rp = Array.isArray(resArr) ? resArr[resArr.length - 1] : resArr;
                                                     if (rp && rp.status) {
-                                                        delete TAKING[coinid];
                                                         MDS.notify("Bet taken!");
                                                         switchTab("mybets");
+                                                        renderOpenBets();  // re-render to show greyed-out card on Play tab
                                                         setTimeout(function() { refreshBets(); refreshBalance(); }, 2000);
                                                     } else {
                                                         delete TAKING[coinid];
