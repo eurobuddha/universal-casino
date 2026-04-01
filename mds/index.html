@@ -237,6 +237,98 @@ body::after{
   height:1px;background:linear-gradient(90deg,transparent,var(--border),transparent);
   margin:8px 0;
 }
+
+/* Coin flip animation */
+.coin-scene{
+  perspective:600px;
+  display:flex;justify-content:center;align-items:center;
+  padding:20px 0 12px;
+}
+.coin-container{
+  width:80px;height:80px;position:relative;
+  transform-style:preserve-3d;
+}
+.coin-container--spinning{
+  animation:coinSpin 1.8s cubic-bezier(.4,0,.2,1) infinite;
+}
+.coin-container--result{
+  animation:coinReveal .8s cubic-bezier(.2,.8,.3,1) forwards;
+}
+@keyframes coinSpin{
+  0%{transform:rotateY(0deg)}
+  100%{transform:rotateY(1080deg)}
+}
+@keyframes coinReveal{
+  0%{transform:rotateY(720deg) scale(.8)}
+  60%{transform:rotateY(0deg) scale(1.15)}
+  100%{transform:rotateY(0deg) scale(1)}
+}
+.coin-face{
+  position:absolute;inset:0;
+  border-radius:50%;
+  display:flex;align-items:center;justify-content:center;
+  font-family:var(--serif);font-weight:900;
+  backface-visibility:hidden;
+  border:3px solid;
+}
+.coin-front{
+  background:linear-gradient(145deg,#e8c874,#d4a843,#a07c2e);
+  border-color:#c9982a;
+  color:var(--felt-dark);font-size:28px;
+  box-shadow:inset 0 2px 6px rgba(255,255,255,.3),inset 0 -2px 6px rgba(0,0,0,.2),0 4px 16px rgba(212,168,67,.4);
+  text-shadow:0 1px 2px rgba(0,0,0,.15);
+}
+.coin-back{
+  background:linear-gradient(145deg,#c9982a,#a07c2e,#7a5c1e);
+  border-color:#8a6c20;
+  color:var(--gold-light);font-size:28px;
+  transform:rotateY(180deg);
+  box-shadow:inset 0 2px 6px rgba(255,255,255,.2),inset 0 -2px 6px rgba(0,0,0,.3),0 4px 16px rgba(160,124,46,.4);
+}
+
+/* Result overlay on coin */
+.coin-result{
+  position:absolute;inset:-4px;border-radius:50%;
+  display:flex;align-items:center;justify-content:center;
+  text-align:center;
+  font-family:var(--sans);font-size:10px;font-weight:800;
+  text-transform:uppercase;letter-spacing:.5px;
+  line-height:1.2;
+  animation:resultPop .5s cubic-bezier(.2,.8,.3,1) forwards;
+}
+.coin-result--win{
+  background:linear-gradient(145deg,#22c55e,#16a34a);
+  border:3px solid #4ade80;
+  color:#fff;
+  box-shadow:0 0 24px rgba(34,197,94,.5),0 4px 16px rgba(34,197,94,.3);
+}
+.coin-result--lose{
+  background:linear-gradient(145deg,#dc2626,#b91c1c);
+  border:3px solid #f87171;
+  color:#fff;
+  box-shadow:0 0 24px rgba(239,68,68,.5),0 4px 16px rgba(239,68,68,.3);
+}
+@keyframes resultPop{
+  0%{transform:scale(0);opacity:0}
+  60%{transform:scale(1.2)}
+  100%{transform:scale(1);opacity:1}
+}
+
+/* TX ID display */
+.txid-row{
+  margin-top:8px;display:flex;align-items:center;gap:6px;
+  font-family:var(--mono);font-size:10px;color:var(--text-dim);
+  background:var(--surface);border:1px solid var(--border);
+  border-radius:6px;padding:6px 10px;cursor:pointer;
+  transition:border-color .2s;word-break:break-all;
+}
+.txid-row:hover{border-color:var(--gold-border)}
+.txid-row__label{color:var(--text-dim);font-weight:700;white-space:nowrap}
+.txid-row__copy{
+  margin-left:auto;white-space:nowrap;
+  color:var(--gold);font-weight:700;font-size:9px;
+  text-transform:uppercase;letter-spacing:.5px;
+}
 </style>
 </head>
 <body>
@@ -293,7 +385,7 @@ body::after{
 
 <script>
 /* ============================================
-   UNIVERSAL CASINO v1.1.1
+   UNIVERSAL CASINO v1.1.2
    3-phase commit-reveal: create → take → reveal → resolve
    Fair odds — neither party can compute outcome early
    ============================================ */
@@ -318,6 +410,7 @@ var SELECTED_PRESET = "flip";
 var CARD_PICKS = {};
 var PENDING_TXS = {};
 var AUTO_BUSY = {};
+var RESOLVED_BETS = [];  // {coinid, role, game, pick, result, playerWins, winnings, amount, txid, time}
 
 // ===== Helpers =====
 function miniNum(val) { return parseFloat(parseFloat(val).toFixed(4)); }
@@ -428,6 +521,42 @@ function setStates(txid, states, idx, callback) {
 
 function isMyKey(pubkey) { return MY_KEYS[pubkey] === true; }
 
+function coinAnimHTML(spinning) {
+    return '<div class="coin-scene"><div class="coin-container' + (spinning ? ' coin-container--spinning' : '') + '">' +
+        '<div class="coin-face coin-front">\u00A4</div>' +
+        '<div class="coin-face coin-back">\u00A4</div>' +
+        '</div></div>';
+}
+
+function coinResultHTML(playerWins, isHouse) {
+    var won = (playerWins && !isHouse) || (!playerWins && isHouse);
+    var label = won ? 'YOU<br>WIN' : 'YOU<br>LOSE';
+    var cls = won ? 'coin-result--win' : 'coin-result--lose';
+    return '<div class="coin-scene"><div class="coin-container coin-container--result">' +
+        '<div class="coin-face coin-front" style="opacity:0"></div>' +
+        '<div class="coin-result ' + cls + '">' + label + '</div>' +
+        '</div></div>';
+}
+
+function txidRowHTML(txid) {
+    var short = txid.substring(0, 20) + '...' + txid.substring(txid.length - 8);
+    return '<div class="txid-row" onclick="copyTxid(\'' + txid + '\',this)" title="Click to copy">' +
+        '<span class="txid-row__label">TX:</span> ' + short +
+        '<span class="txid-row__copy">Copy</span></div>';
+}
+
+function copyTxid(txid, el) {
+    if (navigator.clipboard) {
+        navigator.clipboard.writeText(txid);
+    } else {
+        var ta = document.createElement('textarea');
+        ta.value = txid; document.body.appendChild(ta); ta.select();
+        document.execCommand('copy'); document.body.removeChild(ta);
+    }
+    var copyEl = el.querySelector('.txid-row__copy');
+    if (copyEl) { copyEl.innerText = 'Copied!'; setTimeout(function() { copyEl.innerText = 'Copy'; }, 2000); }
+}
+
 // ===== MDS INIT =====
 MDS.init(function(msg) {
     if (msg.event === "inited") initApp();
@@ -519,7 +648,7 @@ function loadWalletKeys(callback) {
 function finishInit() {
     loadWalletKeys(function() {
         DB_READY = true;
-        MDS.log("Casino v1.1.1 ready. Script=" + SCRIPT_ADDR + " Pub=" + MY_PUBKEY.substring(0,16) + "... Keys=" + Object.keys(MY_KEYS).length);
+        MDS.log("Casino v1.1.2 ready. Script=" + SCRIPT_ADDR + " Pub=" + MY_PUBKEY.substring(0,16) + "... Keys=" + Object.keys(MY_KEYS).length);
         refreshBets(); refreshBalance();
         updateSummary();
     });
@@ -692,6 +821,11 @@ function renderMyBets() {
             html += '<div class="card-row"><span class="info">Timeout: <b>' + (left > 0 ? left + ' blocks' : 'EXPIRED') + '</b></span></div>';
         }
 
+        // Coin flip animation for phases 1-2
+        if (range == 2 && phase >= 1) {
+            html += coinAnimHTML(true);
+        }
+
         html += '<div class="divider"></div>';
         html += '<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">';
         if (phase === 0 && isHouse) {
@@ -720,6 +854,20 @@ function renderMyBets() {
         html += '<div class="bet-status" id="' + statusId + '"></div>';
         html += '</div>';
     });
+
+    // Show resolved bets (results that are no longer on-chain)
+    RESOLVED_BETS.forEach(function(rb) {
+        var gt = gameType(rb.range);
+        var won = rb.playerWins ? (rb.role === 'Player') : (rb.role === 'House');
+        html += '<div class="card" style="border-color:' + (won ? 'rgba(74,222,128,.3)' : 'rgba(248,113,113,.3)') + '">';
+        html += '<div class="card-row"><span class="badge ' + gt.badge + '">' + rb.game + '</span><span class="badge ' + (won ? 'badge--open' : 'badge--reveal') + '">' + (won ? 'Won' : 'Lost') + '</span></div>';
+        html += '<div class="card-row"><span class="info">Role: <b>' + rb.role + '</b></span><span class="info" style="color:' + (won ? 'var(--green)' : 'var(--red)') + ';font-weight:800">' + (won ? '+' + rb.winnings : '-' + rb.bet) + ' Minima</span></div>';
+        html += '<div class="card-row"><span class="info">Pick: <b>' + rb.pickLabel + '</b> | Result: <b>' + rb.resultLabel + '</b></span></div>';
+        if (rb.range == 2) html += coinResultHTML(rb.playerWins, rb.role === 'House');
+        if (rb.txid) html += txidRowHTML(rb.txid);
+        html += '</div>';
+    });
+
     el.innerHTML = html;
 }
 
@@ -1008,6 +1156,19 @@ function doPlayerResolve(coinid, statusId, btnEl) {
                                     if (btnEl) btnEl.classList.remove("btn--disabled");
                                     delete AUTO_BUSY[coinid];
                                     if (rp && rp.status) {
+                                        var isHouse = isMyKey(getState(coin, 0));
+                                        var gt = gameType(range);
+                                        var postTxid = (rp.response && rp.response.txpowid) ? rp.response.txpowid : coinid;
+                                        RESOLVED_BETS.unshift({
+                                            coinid: coinid, role: isHouse ? 'House' : 'Player',
+                                            game: gt.name, range: range,
+                                            pickLabel: pickLabel(range, playerpick),
+                                            resultLabel: pickLabel(range, result),
+                                            playerWins: playerWins, winnings: winnings,
+                                            bet: bet, amount: totalAmt, txid: postTxid,
+                                            time: Date.now()
+                                        });
+                                        if (RESOLVED_BETS.length > 20) RESOLVED_BETS.pop();
                                         if (statusEl) showOk(statusEl, playerWins ? "You won " + winnings + " Minima!" : "House won. Better luck next time.");
                                         MDS.notify(playerWins ? "You won " + winnings + " Minima!" : "House won.");
                                         refreshBets(); refreshBalance();
