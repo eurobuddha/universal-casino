@@ -138,7 +138,7 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:15
 .hist-row:last-child{border-bottom:none}
 
 /* Activity log */
-.log{max-height:120px;overflow-y:auto;font-size:12px;font-family:var(--mono);background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);margin:8px 0}
+.log{max-height:240px;overflow-y:auto;font-size:12px;font-family:var(--mono);background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);margin:8px 0}
 .log:empty{display:none}
 .log-entry{padding:4px 8px;border-bottom:1px solid var(--border);display:flex;gap:6px;align-items:baseline}
 .log-entry:last-child{border-bottom:none}
@@ -232,7 +232,7 @@ function logActivity(msg,type){
   var t=new Date(),ts=('0'+t.getHours()).slice(-2)+':'+('0'+t.getMinutes()).slice(-2)+':'+('0'+t.getSeconds()).slice(-2);
   var cls=type==='ok'?'log--ok':type==='warn'?'log--warn':type==='err'?'log--err':'log--info';
   el.innerHTML='<div class="log-entry"><span class="log-time">'+ts+'</span><span class="log-msg '+cls+'">'+msg+'</span></div>'+el.innerHTML;
-  while(el.children.length>20)el.removeChild(el.lastChild);
+  while(el.children.length>100)el.removeChild(el.lastChild);
   MDS.log("LOG: "+msg);
 }
 
@@ -284,10 +284,11 @@ function clearPendingStatus(){
     (function(el){setTimeout(function(){el.innerText="";el.className="bet-status"},4000)})(els[i]);
   }
   if(PENDING_CREATE){
-    PENDING_CREATE=false;
+    var pcInfo=PENDING_CREATE;PENDING_CREATE=false;
     var cs=document.getElementById("createStatus");
     if(cs){cs.className="status status--ok";cs.innerText="Bet created and confirmed!";setTimeout(function(){cs.innerText="";cs.className="status"},5000)}
-    logActivity("Bet confirmed on-chain!","ok");
+    var pcMsg=pcInfo.game?(pcInfo.game+" bet confirmed on-chain \u2014 "+pcInfo.stake+" Minima locked"):"Bet confirmed on-chain!";
+    logActivity(pcMsg,"ok");
   }
 }
 
@@ -311,12 +312,14 @@ function resolvePendingResults(){
         var foundWin=walletCoins.some(function(c){return Math.abs(parseFloat(c.amount)-winAmt)<0.001});
         iWon=foundWin;profit=iWon?miniNum(winAmt-parseFloat(pr.bet)):parseFloat(pr.bet);
       }
-      RESOLVED_BETS.unshift({coinid:pr.coinid,role:pr.role,game:pr.game,range:pr.range,pickLabel:'\u2014',resultLabel:'\u2014',profit:profit,won:iWon,bet:pr.bet,amount:pr.amount,txid:pr.coinid,time:pr.time});
+      var prPickLabel=(pr.pickIdx>=0)?pickLabel(pr.range,pr.pickIdx):'\u2014';
+      RESOLVED_BETS.unshift({coinid:pr.coinid,role:pr.role,game:pr.game,range:pr.range,pickLabel:prPickLabel,resultLabel:'\u2014',profit:profit,won:iWon,bet:pr.bet,amount:pr.amount,txid:pr.coinid,time:pr.time});
       if(RESOLVED_BETS.length>50)RESOLVED_BETS.pop();
       saveHistory();
       var playerWins=(pr.role==='Player')?iWon:!iWon;
-      flashResult(playerWins,pr.role==='House',pr.game,profit,pr.range,-1,-1);
-      logActivity((iWon?"WON +":"LOST -")+profit+" Minima \u2014 "+pr.game+" (as "+pr.role+")",iWon?"ok":"err");
+      flashResult(playerWins,pr.role==='House',pr.game,profit,pr.range,pr.pickIdx>=0?pr.pickIdx:-1,-1);
+      var prLogPick=pr.pickIdx>=0?" \u2014 Picked: "+prPickLabel:"";
+      logActivity((iWon?"WON +":"LOST -")+profit+" Minima \u2014 "+pr.game+prLogPick+" (as "+pr.role+")",iWon?"ok":"err");
       toRemove.push(idx);
     });
     toRemove.sort(function(a,b){return b-a}).forEach(function(i){PENDING_RESULTS.splice(i,1)});
@@ -371,7 +374,7 @@ MDS.init(function(msg){
   if(msg.event==="inited")initApp();
   if(msg.event==="NEWBLOCK"){
     updateBlock(msg);
-    if(DB_READY){refreshBets();refreshBalance();autoProcess()}
+    if(DB_READY){refreshBets();refreshBalance();autoProcess();if(PENDING_RESULTS.length>0)resolvePendingResults()}
     if(Object.keys(PENDING_TXS).length>0)checkPendingComplete();
   }
   if(msg.event==="NEWBALANCE"){
@@ -503,11 +506,13 @@ function refreshBets(){
         if(RESOLVED_BETS.some(function(rb){return rb.coinid===old.coinid}))return;
         if(phase===2&&amHouse&&!amPlayer){
           var range=parseInt(getState(old,3))||2,payout=parseInt(getState(old,4))||2,bet=getState(old,5)||"0";
-          PENDING_RESULTS.push({coinid:old.coinid,role:'House',range:range,payout:payout,bet:bet,amount:parseFloat(old.amount),game:gameType(range).name,time:Date.now()});
+          var pk2=parseInt(getState(old,11));
+          PENDING_RESULTS.push({coinid:old.coinid,role:'House',range:range,payout:payout,bet:bet,amount:parseFloat(old.amount),game:gameType(range).name,pickIdx:pk2,time:Date.now()});
         }
         if(phase===2&&amPlayer&&!amHouse){
           var rng=parseInt(getState(old,3))||2,bt=getState(old,5)||"0";
-          PENDING_RESULTS.push({coinid:old.coinid,role:'Player',range:rng,payout:parseInt(getState(old,4))||2,bet:bt,amount:parseFloat(old.amount),game:gameType(rng).name,time:Date.now()});
+          var pk3=parseInt(getState(old,11));
+          PENDING_RESULTS.push({coinid:old.coinid,role:'Player',range:rng,payout:parseInt(getState(old,4))||2,bet:bt,amount:parseFloat(old.amount),game:gameType(rng).name,pickIdx:pk3,time:Date.now()});
         }
       });
     }
@@ -520,10 +525,33 @@ function refreshBets(){
       var prevIds={};PREV_BETS.forEach(function(p){prevIds[p.coinid]=true});
       newBets.forEach(function(c){
         if(!prevIds[c.coinid]&&parseInt(getState(c,6))===0&&isMyKey(getState(c,0))){
-          PENDING_CREATE=false;
+          var pcInfo=PENDING_CREATE;PENDING_CREATE=false;
           var cs=document.getElementById("createStatus");
           if(cs){cs.className="status status--ok";cs.innerText="Bet confirmed on-chain!";setTimeout(function(){cs.innerText="";cs.className="status"},5000)}
-          logActivity("Bet confirmed on-chain!","ok");
+          var pcMsg=pcInfo&&pcInfo.game?(pcInfo.game+" bet confirmed on-chain \u2014 "+pcInfo.stake+" Minima locked"):"Bet confirmed on-chain!";
+          logActivity(pcMsg,"ok");
+        }
+      });
+    }
+    // Detect phase transitions (other party acted)
+    if(PREV_BETS.length>0){
+      var prevMap={};PREV_BETS.forEach(function(p){prevMap[p.coinid]=p});
+      newBets.forEach(function(c){
+        var prev=null;
+        // Find matching coin by house commit (port 2) — coinid changes each phase
+        var hc=getState(c,2);
+        PREV_BETS.forEach(function(p){if(getState(p,2)===hc&&p.coinid!==c.coinid)prev=p});
+        if(!prev)return;
+        var oldPhase=parseInt(getState(prev,6))||0,newPhase=parseInt(getState(c,6))||0;
+        if(oldPhase===newPhase)return;
+        var rng=parseInt(getState(c,3))||2,gt=gameType(rng),bt=getState(c,5)||"0";
+        var amHouse=isMyKey(getState(c,0)),amPlayer=isMyKey(getState(c,8));
+        if(oldPhase===0&&newPhase===1&&amHouse){
+          var ppick=pickLabel(rng,getState(c,11));
+          logActivity("Your "+gt.name+" bet was taken! Player picked "+ppick+". Revealing secret...","info");
+        }
+        if(oldPhase===1&&newPhase===2&&amPlayer){
+          logActivity("House revealed secret on your "+gt.name+" bet. Resolving...","info");
         }
       });
     }
@@ -620,8 +648,8 @@ function createBet(){
         statusEl.innerText="Sending...";
         MDS.cmd(cmd,function(sres){
           btn.classList.remove("btn--disabled");
-          if(isPending(sres)){PENDING_CREATE=true;logActivity("Create bet pending \u2014 approve in Pending Actions","warn");showPending(statusEl,"Bet queued \u2014 approve in Pending Actions")}
-          else if(sres.status){statusEl.className="status status--ok";statusEl.innerText="Bet created! Waiting for confirmation...";logActivity("Bet created \u2014 "+p.name+" "+bet+" Minima","ok");setTimeout(function(){refreshBets();refreshBalance()},3000)}
+          if(isPending(sres)){PENDING_CREATE={game:p.name,bet:bet,stake:stake,odds:(p.payout-1)};logActivity("Create "+p.name+" bet pending \u2014 approve in Pending Actions","warn");showPending(statusEl,"Bet queued \u2014 approve in Pending Actions")}
+          else if(sres.status){PENDING_CREATE={game:p.name,bet:bet,stake:stake,odds:(p.payout-1)};statusEl.className="status status--ok";statusEl.innerText="Bet created! Waiting for confirmation...";logActivity("Created "+p.name+" bet \u2014 "+bet+" Minima ("+(p.payout-1)+":1 odds)","ok");setTimeout(function(){refreshBets();refreshBalance()},3000)}
           else{showErr(statusEl,sres.error||"Send failed")}
         });
       });
@@ -646,7 +674,7 @@ function cancelBet(coinid,statusId,btnEl){
           MDS.cmd("txnbasics id:"+txid+";txnpost id:"+txid,function(resArr){
             var rp=Array.isArray(resArr)?resArr[resArr.length-1]:resArr;
             if(btnEl)btnEl.classList.remove("btn--disabled");
-            if(rp&&rp.status){showOk(statusEl,"Bet cancelled. Funds returned.");refreshBets();refreshBalance()}
+            if(rp&&rp.status){var cgt=gameType(parseInt(getState(coin,3))||2);showOk(statusEl,"Bet cancelled. Funds returned.");logActivity(cgt.name+" bet cancelled \u2014 "+coin.amount+" Minima returned","ok");refreshBets();refreshBalance()}
             else{showErr(statusEl,"Cancel failed: "+(rp?rp.error:"unknown"),txid)}
           });
         });
@@ -662,6 +690,7 @@ function takeBet(coinid,statusId,btnEl){
   var coin=BETS.find(function(c){return c.coinid===coinid});if(!coin)return;
   TAKING[coinid]=true;if(btnEl)btnEl.classList.add("btn--disabled");
   var bet=getState(coin,5),total=miniNum(parseFloat(coin.amount)+parseFloat(bet)),pick=CARD_PICKS[coinid]||0;
+  var tRange=parseInt(getState(coin,3))||2,tGt=gameType(tRange),tPickLabel=pickLabel(tRange,pick);
   var txid="take_"+Date.now(),statusEl=document.getElementById(statusId);
   showPending(statusEl,"Generating secret...");
   MDS.cmd("random",function(rres){
@@ -686,10 +715,10 @@ function takeBet(coinid,statusId,btnEl){
                     setStates(txid,states,0,function(){
                       statusEl.innerText="Signing...";
                       MDS.cmd("txnsign id:"+txid+" publickey:auto",function(rs){
-                        if(isPending(rs)){logActivity("Take bet pending \u2014 approve in Pending Actions","warn");showPending(statusEl,"Approve in Pending Actions to take this bet",txid,function(ok2){if(ok2){logActivity("Bet taken! Waiting for house to reveal...","ok");MDS.notify("Bet taken!");switchTab("mybets");refreshBets();refreshBalance()}else{delete TAKING[coinid];renderOpenBets()}});return}
+                        if(isPending(rs)){logActivity("Taking "+tGt.name+" bet pending \u2014 picked "+tPickLabel+" ("+bet+" Minima)","warn");showPending(statusEl,"Approve in Pending Actions to take this bet",txid,function(ok2){if(ok2){logActivity("Bet taken! "+tGt.name+" \u2014 picked "+tPickLabel+". Waiting for house reveal...","ok");MDS.notify("Bet taken!");switchTab("mybets");refreshBets();refreshBalance()}else{delete TAKING[coinid];renderOpenBets()}});return}
                         MDS.cmd("txnbasics id:"+txid+";txnpost id:"+txid,function(resArr){
                           var rp=Array.isArray(resArr)?resArr[resArr.length-1]:resArr;
-                          if(rp&&rp.status){MDS.notify("Bet taken!");switchTab("mybets");renderOpenBets();setTimeout(function(){refreshBets();refreshBalance()},2000)}
+                          if(rp&&rp.status){logActivity("Bet taken! "+tGt.name+" \u2014 picked "+tPickLabel+" ("+bet+" Minima). Waiting for house reveal...","ok");MDS.notify("Bet taken!");switchTab("mybets");renderOpenBets();setTimeout(function(){refreshBets();refreshBalance()},2000)}
                           else{delete TAKING[coinid];showErr(statusEl,"Post failed: "+(rp?rp.error:""),txid)}
                         });
                       });
@@ -709,7 +738,7 @@ function takeBet(coinid,statusId,btnEl){
 
 // ===== House Auto-Reveal (phase 1>2) =====
 function doAutoReveal(coin){
-  var coinid=coin.coinid,betCommit=getState(coin,2);
+  var coinid=coin.coinid,betCommit=getState(coin,2),revGt=gameType(parseInt(getState(coin,3))||2);
   MDS.keypair.get("casino_secret_for_"+betCommit,function(sres){
     if(!sres.value){delete AUTO_BUSY[coinid];return}
     var housesecret=sres.value,txid="autoreveal_"+Date.now();
@@ -722,12 +751,12 @@ function doAutoReveal(coin){
           var states=[[0,getState(coin,0)],[1,getState(coin,1)],[2,getState(coin,2)],[3,getState(coin,3)],[4,getState(coin,4)],[5,getState(coin,5)],[6,"2"],[7,getState(coin,7)],[8,getState(coin,8)],[9,getState(coin,9)],[10,getState(coin,10)],[11,getState(coin,11)],[12,housesecret]];
           setStates(txid,states,0,function(){
             MDS.cmd("txnsign id:"+txid+" publickey:"+getState(coin,0),function(rs){
-              if(isPending(rs)){var safeCoinId=coinid.replace(/[^a-fA-F0-9x]/g,'');var statusEl=document.getElementById('my_status_'+safeCoinId.substring(0,16));logActivity("House reveal pending \u2014 approve in Pending Actions","warn");showPending(statusEl,"Auto-reveal pending \u2014 approve in Pending Actions",txid,function(ok){delete AUTO_BUSY[coinid];if(ok)logActivity("House secret revealed \u2014 waiting for player resolve","ok");refreshBets()});return}
+              if(isPending(rs)){var safeCoinId=coinid.replace(/[^a-fA-F0-9x]/g,'');var statusEl=document.getElementById('my_status_'+safeCoinId.substring(0,16));logActivity(revGt.name+" reveal pending \u2014 approve in Pending Actions","warn");showPending(statusEl,"Auto-reveal pending \u2014 approve in Pending Actions",txid,function(ok){delete AUTO_BUSY[coinid];if(ok)logActivity(revGt.name+" \u2014 house secret revealed. Waiting for player to resolve...","ok");refreshBets()});return}
               if(!rs.status){MDS.cmd("txndelete id:"+txid);delete AUTO_BUSY[coinid];return}
               MDS.cmd("txnbasics id:"+txid+";txnpost id:"+txid,function(resArr){
                 var rp=Array.isArray(resArr)?resArr[resArr.length-1]:resArr;
-                if(rp&&rp.status){MDS.notify("Secret revealed!");logActivity("House secret revealed \u2014 waiting for player","ok")}
-                else{MDS.cmd("txndelete id:"+txid);logActivity("Auto-reveal failed","err")}
+                if(rp&&rp.status){MDS.notify("Secret revealed!");logActivity(revGt.name+" \u2014 house secret revealed. Waiting for player to resolve...","ok")}
+                else{MDS.cmd("txndelete id:"+txid);logActivity(revGt.name+" auto-reveal failed","err")}
                 delete AUTO_BUSY[coinid];refreshBets();refreshBalance();
               });
             });
@@ -764,7 +793,7 @@ function doPlayerResolve(coinid,statusId,btnEl){
             MDS.cmd("txnstate id:"+txid+" port:13 value:"+playersecret,function(){
               MDS.cmd("txnsign id:"+txid+" publickey:"+getState(coin,8),function(rs){
                 if(isPending(rs)){
-  logActivity("Resolve pending \u2014 approve in Pending Actions","warn");
+  logActivity(gameType(range).name+" resolve pending \u2014 approve in Pending Actions","warn");
   if(statusEl)showPending(statusEl,"Resolve pending \u2014 approve in Pending Actions",txid,function(ok){
     if(btnEl)btnEl.classList.remove("btn--disabled");delete AUTO_BUSY[coinid];
     if(ok){
@@ -774,7 +803,7 @@ function doPlayerResolve(coinid,statusId,btnEl){
       RESOLVED_BETS.unshift({coinid:coinid,role:isHouse?'House':'Player',game:gt.name,range:range,pickLabel:pickLabel(range,playerpick),resultLabel:pickLabel(range,result),playerWins:playerWins,winnings:winnings,profit:profit,won:iWon,bet:bet,amount:totalAmt,txid:coinid,time:Date.now()});
       if(RESOLVED_BETS.length>50)RESOLVED_BETS.pop();saveHistory();
       flashResult(playerWins,isHouse,gt.name,profit,range,playerpick,result);
-      logActivity((iWon?"WON +":"LOST -")+profit+" Minima \u2014 "+gt.name,iWon?"ok":"err");
+      logActivity((iWon?"WON +":"LOST -")+profit+" Minima \u2014 "+gt.name+" \u2014 Picked: "+pickLabel(range,playerpick)+", Result: "+pickLabel(range,result)+" (as "+(isHouse?"House":"Player")+")",iWon?"ok":"err");
       MDS.notify(iWon?"You won +"+profit+" Minima!":"You lost -"+profit+" Minima.");
       refreshBets();refreshBalance();
     }
@@ -794,7 +823,7 @@ function doPlayerResolve(coinid,statusId,btnEl){
                     RESOLVED_BETS.unshift({coinid:coinid,role:isHouse?'House':'Player',game:gt.name,range:range,pickLabel:pickLabel(range,playerpick),resultLabel:pickLabel(range,result),playerWins:playerWins,winnings:winnings,profit:profit,won:iWon,bet:bet,amount:totalAmt,txid:postTxid,time:Date.now()});
                     if(RESOLVED_BETS.length>50)RESOLVED_BETS.pop();saveHistory();
                     flashResult(playerWins,isHouse,gt.name,profit,range,playerpick,result);
-                    logActivity((iWon?"WON +":"LOST -")+profit+" Minima \u2014 "+gt.name,iWon?"ok":"err");
+                    logActivity((iWon?"WON +":"LOST -")+profit+" Minima \u2014 "+gt.name+" \u2014 Picked: "+pickLabel(range,playerpick)+", Result: "+pickLabel(range,result)+" (as "+(isHouse?"House":"Player")+")",iWon?"ok":"err");
                     MDS.notify(iWon?"You won +"+profit+" Minima!":"You lost -"+profit+" Minima.");
                     refreshBets();refreshBalance();
                   }else{if(statusEl)showErr(statusEl,"Resolve failed: "+(rp?rp.error:""),txid)}
@@ -838,7 +867,7 @@ function claimTimeout(coinid,statusId,btnEl){
           MDS.cmd("txnbasics id:"+txid+";txnpost id:"+txid,function(resArr){
             var rp=Array.isArray(resArr)?resArr[resArr.length-1]:resArr;
             if(btnEl)btnEl.classList.remove("btn--disabled");
-            if(rp&&rp.status){showOk(statusEl,"Timeout claimed! Funds returned.");refreshBets();refreshBalance()}
+            if(rp&&rp.status){var toGt=gameType(parseInt(getState(coin,3))||2);showOk(statusEl,"Timeout claimed! Funds returned.");logActivity("Timeout claimed \u2014 "+toGt.name+" \u2014 "+coin.amount+" Minima returned","ok");refreshBets();refreshBalance()}
             else{showErr(statusEl,"Claim failed: "+(rp?rp.error:""),txid)}
           });
         });
