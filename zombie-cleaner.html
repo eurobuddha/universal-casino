@@ -1,0 +1,432 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Zombie Cleaner</title>
+<script type="text/javascript" src="mds.js"></script>
+<style>
+:root{--bg:#0a0e1a;--text:#e8e0d0;--dim:#5a6080;--gold:#ffd700;--green:#00c853;--pink:#ff2d78;--cyan:#00e5ff;--border:#2a3050;--radius:6px;--pixel:'Press Start 2P',monospace;--mono:'Share Tech Mono',monospace;--body:'Chakra Petch',sans-serif}
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:var(--bg);color:var(--text);font-family:var(--body);font-size:14px;min-height:100vh}
+.shell{max-width:480px;margin:0 auto;padding:16px}
+h1{font-family:var(--pixel);font-size:12px;color:var(--gold);letter-spacing:2px;text-shadow:0 0 10px rgba(255,215,0,.4);margin-bottom:4px}
+.sub{font-size:11px;color:var(--cyan);letter-spacing:2px;text-transform:uppercase;margin-bottom:16px}
+.log{background:rgba(0,0,0,.3);border:1px solid var(--border);border-left:3px solid var(--gold);border-radius:var(--radius);padding:8px 12px;font-family:var(--mono);font-size:12px;max-height:400px;overflow-y:auto;margin-bottom:12px;min-height:60px}
+.log-line{padding:2px 0;animation:fadeIn .3s ease-out}
+@keyframes fadeIn{from{opacity:0;transform:translateX(-8px)}to{opacity:1;transform:none}}
+.ok{color:var(--green)}.err{color:var(--pink)}.warn{color:var(--gold)}.info{color:var(--dim)}.cyan{color:var(--cyan)}
+.btn{font-family:var(--pixel);font-size:9px;padding:14px 20px;border:none;border-radius:var(--radius);cursor:pointer;letter-spacing:1px;transition:all .2s;width:100%;margin-bottom:8px}
+.btn--gold{background:var(--gold);color:#000;box-shadow:0 0 12px rgba(255,215,0,.2)}
+.btn--gold:hover{box-shadow:0 0 24px rgba(255,215,0,.4);transform:translateY(-1px)}
+.btn--green{background:var(--green);color:#000;box-shadow:0 0 12px rgba(0,200,83,.2)}
+.btn--green:hover{box-shadow:0 0 24px rgba(0,200,83,.4);transform:translateY(-1px)}
+.btn--pink{background:var(--pink);color:#fff;box-shadow:0 0 12px rgba(255,45,120,.2)}
+.btn--pink:hover{box-shadow:0 0 24px rgba(255,45,120,.4);transform:translateY(-1px)}
+.btn:disabled{opacity:.3;pointer-events:none}
+.stats{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px}
+.stat{background:rgba(255,255,255,.03);border:1px solid var(--border);border-radius:var(--radius);padding:10px;text-align:center}
+.stat__val{font-family:var(--mono);font-size:18px;font-weight:700;color:var(--gold)}
+.stat__label{font-size:10px;color:var(--dim);margin-top:2px}
+.divider{border-top:1px solid var(--border);margin:12px 0}
+</style>
+<link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=Chakra+Petch:wght@400;600;700&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+</head>
+<body>
+<div class="shell">
+  <h1>ZOMBIE CLEANER</h1>
+  <div class="sub">Node Hygiene Tool</div>
+
+  <div class="stats">
+    <div class="stat"><div class="stat__val" id="statZombies">-</div><div class="stat__label">Zombie TXNs</div></div>
+    <div class="stat"><div class="stat__val" id="statForeign">-</div><div class="stat__label">Foreign Coins</div></div>
+    <div class="stat"><div class="stat__val" id="statMine">-</div><div class="stat__label">My Coins</div></div>
+    <div class="stat"><div class="stat__val" id="statRecover">-</div><div class="stat__label">Recoverable M</div></div>
+  </div>
+
+  <button class="btn btn--gold" id="btnScan" onclick="runScan()" disabled>SCAN NODE</button>
+  <button class="btn btn--green" id="btnFix" onclick="runFix()" disabled>FIX ALL ISSUES</button>
+  <button class="btn btn--pink" id="btnSweep" onclick="runSweep()" disabled>SWEEP RECOVERABLE COINS</button>
+
+  <div id="pendingBanner" style="display:none;background:var(--gold);color:#000;font-family:var(--pixel);font-size:9px;letter-spacing:1px;padding:14px 16px;border-radius:var(--radius);margin-bottom:8px;text-align:center;line-height:1.6;animation:pulse 1.5s ease-in-out infinite">
+    ACTIONS NEED APPROVAL<br>
+    <span style="font-family:var(--body);font-size:13px;letter-spacing:0">Open <b>Pending Actions</b> in MiniHub and approve all items, then come back and SCAN again.</span>
+  </div>
+  <style>@keyframes pulse{0%,100%{opacity:1}50%{opacity:.7}}</style>
+
+  <div class="divider"></div>
+  <div class="log" id="log"></div>
+</div>
+
+<script>
+// ============================================================
+// KNOWN SCRIPTS — only these addresses are ever touched
+// ============================================================
+var CASINO_SCRIPT='LET hpk=PREVSTATE(0) LET ha=PREVSTATE(1) LET hc=PREVSTATE(2) LET rng=PREVSTATE(3) LET po=PREVSTATE(4) LET bt=PREVSTATE(5) LET ph=PREVSTATE(6) LET to=PREVSTATE(7) IF ph EQ 0 AND SIGNEDBY(hpk) THEN RETURN TRUE ENDIF IF ph EQ 0 THEN ASSERT SAMESTATE(0 5) ASSERT STATE(6) EQ 1 ASSERT STATE(7) EQ to ASSERT STATE(11) GTE 0 AND STATE(11) LT rng ASSERT VERIFYOUT(@INPUT @ADDRESS @AMOUNT+bt @TOKENID TRUE) RETURN TRUE ENDIF LET qk=PREVSTATE(8) LET pk=PREVSTATE(11) IF ph EQ 1 AND SIGNEDBY(hpk) THEN ASSERT SAMESTATE(0 5) ASSERT STATE(6) EQ 2 ASSERT SAMESTATE(7 11) LET hs=STATE(12) ASSERT SHA3(hs) EQ hc ASSERT VERIFYOUT(@INPUT @ADDRESS @AMOUNT @TOKENID TRUE) RETURN TRUE ENDIF IF ph EQ 1 AND @COINAGE GT to AND SIGNEDBY(qk) THEN RETURN TRUE ENDIF IF ph EQ 2 AND SIGNEDBY(qk) THEN LET ps=STATE(13) ASSERT SHA3(ps) EQ PREVSTATE(10) LET hs=PREVSTATE(12) LET h=SHA3(CONCAT(hs ps)) LET r=NUMBER(SUBSET(0 4 h))%rng IF r EQ pk THEN LET w=bt*po ASSERT VERIFYOUT(@INPUT PREVSTATE(9) w @TOKENID FALSE) IF @AMOUNT GT w THEN ASSERT VERIFYOUT(@INPUT+1 ha @AMOUNT-w @TOKENID FALSE) ENDIF ELSE ASSERT VERIFYOUT(@INPUT ha @AMOUNT @TOKENID FALSE) ENDIF RETURN TRUE ENDIF IF ph EQ 2 AND @COINAGE GT to AND SIGNEDBY(hpk) THEN RETURN TRUE ENDIF RETURN FALSE';
+var LIMIT_V1='IF SIGNEDBY(PREVSTATE(0)) THEN RETURN TRUE ENDIF ASSERT VERIFYOUT(@INPUT PREVSTATE(1) PREVSTATE(2) PREVSTATE(3) FALSE) RETURN TRUE';
+var LIMIT_V2='IF SIGNEDBY(PREVSTATE(0)) THEN RETURN TRUE ENDIF IF @COINAGE GT 10 THEN ASSERT VERIFYOUT(@INPUT PREVSTATE(1) @AMOUNT @TOKENID FALSE) RETURN TRUE ENDIF ASSERT VERIFYOUT(@INPUT PREVSTATE(1) PREVSTATE(2) PREVSTATE(3) FALSE) RETURN TRUE';
+
+// ============================================================
+// ZOMBIE TRANSACTION IDS — prefixes and exact names to delete
+// ============================================================
+var ZOMBIE_PREFIXES=['take_','resolve_','autoreveal_','sweep_','timeout_','recover_','zc_'];
+var ZOMBIE_EXACT={'r1':1,'r2':1,'r3':1,'r4':1,'r5':1,'r6':1,'r7':1,'r8':1,'r9':1,'r10':1,'cx1':1,'cx2':1,'cx3':1,'cx4':1,'cx5':1,'cleanup':1,'cleanup1':1,'test1':1,'test2':1,'test3':1,'test':1};
+
+// ============================================================
+// STATE
+// ============================================================
+// Hardcoded addresses (deterministic hash of script — same on every node)
+var CASINO_ADDR='0xD65ADBBB7AB5032D794B02CF5E8814C720BE3C9562CC6C07081DE41CCA665A6F';
+var LIMIT_ADDR_V1='0x131609A5E510326354647E240F51C53825EFF8CA2B9DE07711EA56055E57672D';
+var LIMIT_ADDR_V2='0xE4D3F27BB044500AF56EF775DAFF3A12187EE79A8460FBBBF321F76A660D7797';
+var MY_KEYS={};
+var READY=false;
+var scanResults={zombies:[],foreign:[],mine:[],recoverable:[]};
+
+// ============================================================
+// HELPERS
+// ============================================================
+function esc(s){var d=document.createElement('div');d.textContent=String(s);return d.innerHTML}
+function log(msg,cls){
+  var el=document.getElementById('log');
+  el.innerHTML+='<div class="log-line '+(cls||'info')+'">'+esc(msg)+'</div>';
+  el.scrollTop=el.scrollHeight;
+}
+function getState(coin,port){
+  if(!coin.state)return'';
+  for(var i=0;i<coin.state.length;i++){if(coin.state[i].port===port||coin.state[i].port==port)return coin.state[i].data}
+  return'';
+}
+function isMyKey(pk){return MY_KEYS[pk]===true}
+
+// ============================================================
+// INIT — register scripts, load keys, enable SCAN
+// No trackall:true — coins are already tracked by the casino/limit dapps
+// ============================================================
+MDS.init(function(msg){
+
+  if(msg.event==='inited'){
+    log('Zombie Cleaner v2.0.2','cyan');
+    log('Casino: '+CASINO_ADDR.substring(0,20)+'...','info');
+    log('Limit V1: '+LIMIT_ADDR_V1.substring(0,20)+'...','info');
+    log('Limit V2: '+LIMIT_ADDR_V2.substring(0,20)+'...','info');
+
+    // Register scripts on node (needed for trackall:false to work later)
+    MDS.cmd('newscript script:"'+CASINO_SCRIPT+'"');
+    MDS.cmd('newscript script:"'+LIMIT_V1+'"');
+    MDS.cmd('newscript script:"'+LIMIT_V2+'"');
+
+    // Load wallet keys then enable scan
+    MDS.cmd('keys',function(kres){
+      try{
+        var list=kres.response.keys||kres.response;
+        if(Array.isArray(list)){for(var i=0;i<list.length;i++){var pk=list[i].publickey||list[i];if(pk&&typeof pk==='string')MY_KEYS[pk]=true}}
+      }catch(e){}
+      log('Loaded '+Object.keys(MY_KEYS).length+' signing keys','ok');
+      log('Ready — click SCAN NODE','ok');
+      READY=true;
+      document.getElementById('btnScan').disabled=false;
+    });
+  }
+
+});
+
+// ============================================================
+// SCAN — targeted queries at known addresses only
+// ============================================================
+function runScan(){
+  document.getElementById('btnScan').disabled=true;
+  document.getElementById('btnFix').disabled=true;
+  document.getElementById('btnSweep').disabled=true;
+  scanResults={zombies:[],foreign:[],mine:[],recoverable:[]};
+  log('','info');
+  log('=== SCANNING ===','cyan');
+
+  // Phase 1: Find zombie transactions
+  log('Checking transaction list...','info');
+  MDS.cmd('txnlist',function(res){
+    var pendingCoinIds={};
+    if(res.status&&res.response){
+      res.response.forEach(function(tx){
+        if(!tx.id)return;
+        var isZombie=false;
+        ZOMBIE_PREFIXES.forEach(function(p){if(tx.id.indexOf(p)===0)isZombie=true});
+        if(ZOMBIE_EXACT[tx.id])isZombie=true;
+        // cancel_ txns referencing casino coins (has port 6=phase and port 3=range)
+        if(!isZombie&&tx.id.indexOf('cancel_')===0){
+          try{
+            var inp=tx.transaction&&tx.transaction.inputs&&tx.transaction.inputs[0];
+            if(inp&&inp.state){
+              var hasPhase=false,hasRange=false;
+              inp.state.forEach(function(s){
+                if(s.port===6)hasPhase=true;
+                if(s.port===3){var r=parseInt(s.data);if(r===2||r===6||r===36||r===37)hasRange=true}
+              });
+              if(hasPhase&&hasRange)isZombie=true;
+            }
+          }catch(e){}
+        }
+        if(isZombie){scanResults.zombies.push(tx.id);return}
+        // Live transaction — protect its input coins from being untracked
+        try{
+          var inputs=tx.transaction&&tx.transaction.inputs;
+          if(inputs&&Array.isArray(inputs)){
+            inputs.forEach(function(inp){if(inp.coinid)pendingCoinIds[inp.coinid]=tx.id});
+          }
+        }catch(e){}
+      });
+    }
+    log('Zombie transactions: '+scanResults.zombies.length,scanResults.zombies.length>0?'warn':'ok');
+    if(scanResults.zombies.length>0){
+      scanResults.zombies.forEach(function(id){log('  '+id,'warn')});
+    }
+
+    // Phase 2: Query coins at each known address directly
+    log('Querying casino coins at '+CASINO_ADDR.substring(0,16)+'...','info');
+
+    var addresses=[
+      {addr:CASINO_ADDR, label:'Casino', ports:[0,8]},
+      {addr:LIMIT_ADDR_V1, label:'Limit V1', ports:[0]},
+      {addr:LIMIT_ADDR_V2, label:'Limit V2', ports:[0]}
+    ].filter(function(a){return a.addr});
+
+    var queriesDone=0;
+    var totalQueries=addresses.length;
+
+    function finishScan(){
+      // Remove coins involved in pending actions
+      var pendingSkipped=0;
+      function filterPending(arr){
+        return arr.filter(function(c){
+          if(pendingCoinIds[c.coinid]){pendingSkipped++;return false}
+          return true;
+        });
+      }
+      scanResults.foreign=filterPending(scanResults.foreign);
+      scanResults.mine=filterPending(scanResults.mine);
+      scanResults.recoverable=filterPending(scanResults.recoverable);
+      if(pendingSkipped>0){
+        log('Skipped '+pendingSkipped+' coins in pending actions (protected)','ok');
+        document.getElementById('pendingBanner').style.display='block';
+      }
+
+      // Calculate recoverable amount
+      var recoverAmt=0;
+      scanResults.recoverable.forEach(function(c){if(c.tokenid==='0x00')recoverAmt+=parseFloat(c.amount)});
+
+      // Summary
+      log('','info');
+      log('=== RESULTS ===','cyan');
+      log('Zombie transactions: '+scanResults.zombies.length,scanResults.zombies.length>0?'warn':'ok');
+      log('Foreign coins to untrack: '+scanResults.foreign.length,scanResults.foreign.length>0?'warn':'ok');
+      log('Your coins (will ensure tracked): '+scanResults.mine.length,scanResults.mine.length>0?'ok':'info');
+      log('Recoverable coins: '+scanResults.recoverable.length,scanResults.recoverable.length>0?'warn':'ok');
+      if(recoverAmt>0)log('Recoverable Minima: '+recoverAmt.toFixed(4),'warn');
+
+      // Update stat boxes
+      document.getElementById('statZombies').textContent=scanResults.zombies.length;
+      document.getElementById('statForeign').textContent=scanResults.foreign.length;
+      document.getElementById('statMine').textContent=scanResults.mine.length;
+      document.getElementById('statRecover').textContent=recoverAmt.toFixed(2);
+
+      // Enable buttons
+      var hasIssues=scanResults.zombies.length>0||scanResults.foreign.length>0;
+      document.getElementById('btnFix').disabled=!hasIssues;
+      document.getElementById('btnSweep').disabled=scanResults.recoverable.length===0;
+      document.getElementById('btnScan').disabled=false;
+
+      if(!hasIssues&&scanResults.recoverable.length===0){
+        document.getElementById('pendingBanner').style.display='none';
+        log('Node is clean!','ok');
+      }else{
+        if(hasIssues)log('Click FIX ALL to clean up','warn');
+        if(scanResults.recoverable.length>0)log('Click SWEEP to recover your trapped coins','warn');
+      }
+    }
+
+    if(totalQueries===0){finishScan();return}
+
+    addresses.forEach(function(target){
+      log('Querying '+target.label+' coins at '+target.addr.substring(0,16)+'...','info');
+      MDS.cmd('coins address:'+target.addr,function(cres){
+        if(cres.status&&cres.response){
+          var foreign=0,mine=0;
+          cres.response.forEach(function(c){
+            // Check if user is involved via any of the ownership ports
+            var isMine=false;
+            target.ports.forEach(function(p){
+              if(isMyKey(getState(c,p)))isMine=true;
+            });
+
+            if(isMine){
+              scanResults.mine.push(c);
+              mine++;
+            }else{
+              scanResults.foreign.push(c);
+              foreign++;
+            }
+          });
+          log('  '+target.label+': '+mine+' mine, '+foreign+' foreign'+(cres.response.length>0?'':' (empty)'),foreign>0?'warn':'ok');
+        }else{
+          log('  '+target.label+': query failed','err');
+        }
+
+        queriesDone++;
+        if(queriesDone>=totalQueries)finishScan();
+      });
+    });
+  });
+}
+
+// ============================================================
+// FIX — delete zombies, track mine, untrack foreign, disable tracking
+// ============================================================
+function runFix(){
+  document.getElementById('btnFix').disabled=true;
+  log('','info');
+  log('=== FIXING ===','cyan');
+
+  var total=scanResults.zombies.length+scanResults.foreign.length+scanResults.mine.length;
+  var done=0;
+  var pendingDetected=false;
+
+  function progress(wasPending){
+    if(wasPending)pendingDetected=true;
+    done++;
+    if(done>=total){
+      // After all coin operations complete, disable tracking so foreign coins don't reappear
+      log('Disabling tracking on all contracts...','info');
+      if(CASINO_ADDR){
+        MDS.cmd('newscript script:"'+CASINO_SCRIPT+'" trackall:false',function(r){
+          if(r&&r.pending){log('  Casino trackall:false — PENDING (approve in Pending Actions)','warn')}
+          else{log('  Casino tracking disabled','ok')}
+        });
+      }
+      if(LIMIT_ADDR_V1){
+        MDS.cmd('newscript script:"'+LIMIT_V1+'" trackall:false',function(r){
+          if(r&&r.pending){log('  Limit V1 trackall:false — PENDING','warn')}
+          else{log('  Limit V1 tracking disabled','ok')}
+        });
+      }
+      if(LIMIT_ADDR_V2){
+        MDS.cmd('newscript script:"'+LIMIT_V2+'" trackall:false',function(r){
+          if(r&&r.pending){log('  Limit V2 trackall:false — PENDING','warn')}
+          else{log('  Limit V2 tracking disabled','ok')}
+        });
+      }
+
+      if(pendingDetected){
+        document.getElementById('pendingBanner').style.display='block';
+        log('Fix complete — some actions need approval in Pending Actions','warn');
+        log('Approve all pending items, then SCAN again','warn');
+      }else{
+        log('Fix complete! Cleaned '+(scanResults.zombies.length+scanResults.foreign.length)+' items, confirmed '+scanResults.mine.length+' of your coins','ok');
+        setTimeout(runScan,2000);
+      }
+      document.getElementById('btnFix').disabled=true;
+      document.getElementById('btnScan').disabled=false;
+    }
+  }
+
+  // 1. Delete zombie transactions
+  if(scanResults.zombies.length>0){
+    log('Deleting '+scanResults.zombies.length+' zombie transactions...','warn');
+    scanResults.zombies.forEach(function(id){
+      MDS.cmd('txndelete id:'+id,function(r){
+        var p=r&&r.pending;
+        log('  '+(p?'PENDING':r.status?'DELETED':'FAIL')+' — '+id,p?'warn':r.status?'ok':'err');
+        progress(p);
+      });
+    });
+  }
+
+  // 2. Ensure your own coins are tracked
+  if(scanResults.mine.length>0){
+    log('Confirming '+scanResults.mine.length+' of your coins are tracked...','info');
+    scanResults.mine.forEach(function(c){
+      MDS.cmd('cointrack enable:true coinid:'+c.coinid,function(r){
+        var p=r&&r.pending;
+        log('  '+(p?'PENDING':'TRACKED')+' — '+parseFloat(c.amount).toFixed(4)+' M ('+c.coinid.substring(0,12)+'...)',p?'warn':'ok');
+        progress(p);
+      });
+    });
+  }
+
+  // 3. Untrack foreign coins
+  if(scanResults.foreign.length>0){
+    log('Untracking '+scanResults.foreign.length+' foreign coins...','warn');
+    scanResults.foreign.forEach(function(c){
+      MDS.cmd('cointrack enable:false coinid:'+c.coinid,function(r){
+        var p=r&&r.pending;
+        log('  '+(p?'PENDING':'UNTRACKED')+' — '+parseFloat(c.amount).toFixed(2)+' M ('+c.coinid.substring(0,12)+'...)',p?'warn':'ok');
+        progress(p);
+      });
+    });
+  }
+
+  if(total===0){
+    log('Nothing to fix','ok');
+    document.getElementById('btnFix').disabled=true;
+  }
+}
+
+// ============================================================
+// SWEEP — recover your coins trapped at known contract addresses
+// ============================================================
+function runSweep(){
+  document.getElementById('btnSweep').disabled=true;
+  log('','info');
+  log('=== SWEEPING RECOVERABLE COINS ===','cyan');
+  if(scanResults.recoverable.length===0){log('Nothing to sweep','info');return}
+
+  MDS.cmd('getaddress',function(ares){
+    if(!ares.status){log('Failed to get wallet address','err');return}
+    var myAddr=ares.response.miniaddress;
+    log('Sweeping to: '+myAddr.substring(0,24)+'...','info');
+
+    var idx=0;
+    function next(){
+      if(idx>=scanResults.recoverable.length){
+        log('Sweep complete!','ok');
+        setTimeout(runScan,2000);
+        return;
+      }
+      var c=scanResults.recoverable[idx++];
+      var signKey=isMyKey(getState(c,0))?getState(c,0):(isMyKey(getState(c,8))?getState(c,8):'auto');
+      var txid='zc_'+Date.now();
+      log('  Sweeping '+parseFloat(c.amount).toFixed(4)+' M...','info');
+
+      MDS.cmd('txncreate id:'+txid,function(r0){
+        if(!r0.status){log('    FAIL — txncreate: '+(r0.error||''),'err');setTimeout(next,100);return}
+        MDS.cmd('txninput id:'+txid+' coinid:'+c.coinid,function(r1){
+          if(!r1.status){MDS.cmd('txndelete id:'+txid);log('    FAIL — txninput: '+(r1.error||''),'err');setTimeout(next,100);return}
+          MDS.cmd('txnoutput id:'+txid+' amount:'+c.amount+' address:'+myAddr+' storestate:false',function(r2){
+            if(!r2.status){MDS.cmd('txndelete id:'+txid);log('    FAIL — txnoutput: '+(r2.error||''),'err');setTimeout(next,100);return}
+            MDS.cmd('txnsign id:'+txid+' publickey:'+signKey,function(rs){
+              if(!rs.status&&!rs.pending){
+                MDS.cmd('txndelete id:'+txid);
+                log('    SKIP — cannot sign (key not available)','warn');
+                setTimeout(next,100);return;
+              }
+              if(rs.pending){
+                log('    PENDING — approve in Pending Actions','warn');
+                setTimeout(next,100);return;
+              }
+              MDS.cmd('txnbasics id:'+txid,function(){
+                MDS.cmd('txnpost id:'+txid,function(rp){
+                  if(rp&&rp.status){log('    OK — swept '+parseFloat(c.amount).toFixed(4)+' Minima','ok')}
+                  else{MDS.cmd('txndelete id:'+txid);log('    FAIL — post: '+(rp?rp.error||'':'no response'),'err')}
+                  setTimeout(next,300);
+                });
+              });
+            });
+          });
+        });
+      });
+    }
+    next();
+  });
+}
+</script>
+</body>
+</html>

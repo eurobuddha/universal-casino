@@ -1,0 +1,758 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>minArmyKnife</title>
+<script type="text/javascript" src="mds.js"></script>
+<style>
+:root{--bg:#0a0e1a;--bg2:#121830;--text:#e8e0d0;--dim:#5a6080;--gold:#ffd700;--green:#00c853;--pink:#ff2d78;--cyan:#00e5ff;--red:#ff4444;--border:#2a3050;--radius:6px;--pixel:'Press Start 2P',monospace;--mono:'Share Tech Mono',monospace;--body:'Chakra Petch',sans-serif}
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:var(--bg);color:var(--text);font-family:var(--body);font-size:14px;min-height:100vh}
+.shell{max-width:520px;margin:0 auto;padding:12px}
+h1{font-family:var(--pixel);font-size:11px;color:var(--gold);letter-spacing:2px;text-shadow:0 0 10px rgba(255,215,0,.4);margin-bottom:2px}
+.sub{font-size:10px;color:var(--cyan);letter-spacing:2px;text-transform:uppercase;margin-bottom:10px}
+.tabs{display:flex;gap:2px;margin-bottom:10px;flex-wrap:wrap}
+.tab{font-family:var(--pixel);font-size:7px;letter-spacing:1px;padding:8px 6px;background:var(--bg2);border:1px solid var(--border);border-bottom:none;border-radius:var(--radius) var(--radius) 0 0;color:var(--dim);cursor:pointer;transition:all .2s;flex:1;text-align:center;min-width:60px}
+.tab:hover{color:var(--text)}
+.tab.active{color:var(--gold);border-color:var(--gold);border-bottom:2px solid var(--bg);background:var(--bg);box-shadow:0 -2px 8px rgba(255,215,0,.1)}
+.panel{display:none;border:1px solid var(--border);border-radius:0 0 var(--radius) var(--radius);padding:12px;background:var(--bg)}
+.panel.active{display:block}
+.explainer{font-size:12px;color:var(--dim);line-height:1.5;margin-bottom:10px;padding:8px 10px;background:rgba(255,255,255,.02);border-left:3px solid var(--cyan);border-radius:0 var(--radius) var(--radius) 0}
+.explainer b{color:var(--text)}
+.log{background:rgba(0,0,0,.3);border:1px solid var(--border);border-left:3px solid var(--gold);border-radius:var(--radius);padding:8px 10px;font-family:var(--mono);font-size:11px;max-height:300px;overflow-y:auto;margin-bottom:10px;min-height:50px}
+.log-line{padding:2px 0;animation:fadeIn .3s ease-out}
+@keyframes fadeIn{from{opacity:0;transform:translateX(-8px)}to{opacity:1;transform:none}}
+.ok{color:var(--green)}.err{color:var(--pink)}.warn{color:var(--gold)}.info{color:var(--dim)}.cyan{color:var(--cyan)}
+.btn{font-family:var(--pixel);font-size:8px;padding:12px 16px;border:none;border-radius:var(--radius);cursor:pointer;letter-spacing:1px;transition:all .2s;width:100%;margin-bottom:6px}
+.btn--gold{background:var(--gold);color:#000;box-shadow:0 0 8px rgba(255,215,0,.2)}
+.btn--green{background:var(--green);color:#000;box-shadow:0 0 8px rgba(0,200,83,.2)}
+.btn--pink{background:var(--pink);color:#fff;box-shadow:0 0 8px rgba(255,45,120,.2)}
+.btn--red{background:var(--red);color:#fff;box-shadow:0 0 8px rgba(255,68,68,.2)}
+.btn:hover{transform:translateY(-1px)}
+.btn:disabled{opacity:.3;pointer-events:none}
+.btn-row{display:flex;gap:6px}.btn-row .btn{flex:1}
+.stat-row{display:flex;gap:6px;margin-bottom:10px}
+.stat{flex:1;background:rgba(255,255,255,.03);border:1px solid var(--border);border-radius:var(--radius);padding:8px;text-align:center}
+.stat__val{font-family:var(--mono);font-size:16px;font-weight:700;color:var(--gold)}
+.stat__label{font-size:9px;color:var(--dim);margin-top:2px}
+.script-row{font-family:var(--mono);font-size:10px;padding:6px 8px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:6px}
+.script-row:last-child{border-bottom:none}
+.track-on{color:var(--pink);font-weight:700}
+.track-off{color:var(--green)}
+.badge{font-family:var(--pixel);font-size:6px;padding:2px 6px;border-radius:3px;letter-spacing:1px}
+.badge--warn{background:var(--pink);color:#fff}
+.badge--ok{background:var(--green);color:#000}
+.badge--info{background:var(--cyan);color:#000}
+</style>
+<link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=Chakra+Petch:wght@400;600;700&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+</head>
+<body>
+<div class="shell">
+  <h1>MIN ARMY KNIFE</h1>
+  <div class="sub">Node Hygiene Toolkit</div>
+
+  <div class="tabs">
+    <div class="tab active" onclick="switchTab('tracking')">TRACKING</div>
+    <div class="tab" onclick="switchTab('zombies')">ZOMBIES</div>
+    <div class="tab" onclick="switchTab('txns')">STUCK TXN</div>
+    <div class="tab" onclick="switchTab('consolidate')">UTXO</div>
+    <div class="tab" onclick="switchTab('tokens')">TOKENS</div>
+    <div class="tab" onclick="switchTab('health')">HEALTH</div>
+  </div>
+
+  <!-- ==================== TAB 1: TRACKING AUDIT ==================== -->
+  <div class="panel active" id="panel-tracking">
+    <div class="explainer">
+      <b>Script Tracking Audit</b> — Every dapp that uses <b>trackall:true</b> makes your node follow ALL coins at its contract address. These foreign coins appear as "locked" in your wallet and pollute your transaction history. This tool shows every tracked script and lets you disable tracking on ones you don't use.
+    </div>
+    <div class="stat-row">
+      <div class="stat"><div class="stat__val" id="trackTotal">-</div><div class="stat__label">Scripts</div></div>
+      <div class="stat"><div class="stat__val" id="trackOn">-</div><div class="stat__label">Tracking ON</div></div>
+      <div class="stat"><div class="stat__val" id="trackForeign">-</div><div class="stat__label">Foreign Coins</div></div>
+    </div>
+    <button class="btn btn--gold" id="btnTrackScan" onclick="scanTracking()">SCAN SCRIPTS</button>
+    <button class="btn btn--pink" id="btnTrackFix" onclick="fixTracking()" disabled>DISABLE SAFE TRACKING (protects your coins)</button>
+    <div class="log" id="log-tracking"></div>
+  </div>
+
+  <!-- ==================== TAB 2: ZOMBIE CLEANER ==================== -->
+  <div class="panel" id="panel-zombies">
+    <div class="explainer">
+      <b>Zombie Coin Cleaner</b> — Scans for foreign coins tracked at <b>Casino</b> and <b>Limit DEX</b> contract addresses. Untracks coins that aren't yours and confirms your own coins are tracked. Also finds coins you can recover from expired bets.
+    </div>
+    <div class="stat-row">
+      <div class="stat"><div class="stat__val" id="zcForeign">-</div><div class="stat__label">Foreign</div></div>
+      <div class="stat"><div class="stat__val" id="zcMine">-</div><div class="stat__label">Mine</div></div>
+      <div class="stat"><div class="stat__val" id="zcRecover">-</div><div class="stat__label">Recover M</div></div>
+    </div>
+    <button class="btn btn--gold" id="btnZcScan" onclick="scanZombieCoins()">SCAN KNOWN CONTRACTS</button>
+    <div class="btn-row">
+      <button class="btn btn--green" id="btnZcFix" onclick="fixZombieCoins()" disabled>FIX</button>
+      <button class="btn btn--pink" id="btnZcSweep" onclick="sweepCoins()" disabled>SWEEP</button>
+    </div>
+    <div class="log" id="log-zombies"></div>
+  </div>
+
+  <!-- ==================== TAB 3: STUCK TRANSACTIONS ==================== -->
+  <div class="panel" id="panel-txns">
+    <div class="explainer">
+      <b>Stuck Transaction Cleaner</b> — Finds all transactions in your <b>txnlist</b> that are partially built, unsigned, or abandoned. These can lock coins and prevent new transactions from succeeding. Deletes them to free up your coins.
+    </div>
+    <div class="stat-row">
+      <div class="stat"><div class="stat__val" id="txnTotal">-</div><div class="stat__label">Total TXNs</div></div>
+      <div class="stat"><div class="stat__val" id="txnStuck">-</div><div class="stat__label">Stuck</div></div>
+    </div>
+    <button class="btn btn--gold" id="btnTxnScan" onclick="scanTxns()">SCAN TRANSACTIONS</button>
+    <button class="btn btn--red" id="btnTxnFix" onclick="fixTxns()" disabled>DELETE ALL STUCK TXNS</button>
+    <div class="log" id="log-txns"></div>
+  </div>
+
+  <!-- ==================== TAB 4: COIN CONSOLIDATION ==================== -->
+  <div class="panel" id="panel-consolidate">
+    <div class="explainer">
+      <b>Coin Manager</b> — <b>Consolidate</b> merges many small UTXOs into fewer large ones (fixes slow transactions). <b>Split</b> breaks your balance into multiple equal coins (useful for parallel dapp operations). Your total balance stays the same.
+    </div>
+    <div class="stat-row">
+      <div class="stat"><div class="stat__val" id="coinCount">-</div><div class="stat__label">Coin UTXOs</div></div>
+      <div class="stat"><div class="stat__val" id="coinBalance">-</div><div class="stat__label">Total M</div></div>
+    </div>
+    <button class="btn btn--gold" id="btnCoinScan" onclick="scanCoins()">SCAN COINS</button>
+    <div class="btn-row">
+      <button class="btn btn--green" id="btnConsolidate" onclick="consolidateCoins()" disabled>CONSOLIDATE</button>
+      <button class="btn btn--pink" id="btnSplit" onclick="splitCoins()" disabled>SPLIT INTO 10</button>
+    </div>
+    <div class="log" id="log-consolidate"></div>
+  </div>
+
+  <!-- ==================== TAB 5: TOKEN DUST ==================== -->
+  <div class="panel" id="panel-tokens">
+    <div class="explainer">
+      <b>Token Dust Manager</b> — Shows all non-Minima tokens in your wallet. Tiny airdrop tokens and spam clutter your coin list.
+    </div>
+    <div class="stat-row">
+      <div class="stat"><div class="stat__val" id="tokenCount">-</div><div class="stat__label">Tokens</div></div>
+      <div class="stat"><div class="stat__val" id="tokenDust">-</div><div class="stat__label">Dust (&lt;1)</div></div>
+    </div>
+    <button class="btn btn--gold" id="btnTokenScan" onclick="scanTokens()">SCAN TOKENS</button>
+    <div class="log" id="log-tokens"></div>
+  </div>
+
+  <!-- ==================== TAB 6: BALANCE HEALTH ==================== -->
+  <div class="panel" id="panel-health">
+    <div class="explainer">
+      <b>Balance Health Check</b> — Compares your wallet balance against your actual coins to detect discrepancies. If <b>balance</b> shows more than your real coins total, foreign tracked coins are inflating the number. Also shows node sync status.
+    </div>
+    <div class="stat-row">
+      <div class="stat"><div class="stat__val" id="healthBalance">-</div><div class="stat__label">Balance</div></div>
+      <div class="stat"><div class="stat__val" id="healthCoins">-</div><div class="stat__label">Coins Total</div></div>
+      <div class="stat"><div class="stat__val" id="healthStatus">-</div><div class="stat__label">Status</div></div>
+    </div>
+    <button class="btn btn--gold" id="btnHealthCheck" onclick="checkHealth()">RUN HEALTH CHECK</button>
+    <div class="log" id="log-health"></div>
+  </div>
+</div>
+
+<script>
+// ============================================================
+// KNOWN CONTRACTS
+// ============================================================
+var CASINO_SCRIPT='LET hpk=PREVSTATE(0) LET ha=PREVSTATE(1) LET hc=PREVSTATE(2) LET rng=PREVSTATE(3) LET po=PREVSTATE(4) LET bt=PREVSTATE(5) LET ph=PREVSTATE(6) LET to=PREVSTATE(7) IF ph EQ 0 AND SIGNEDBY(hpk) THEN RETURN TRUE ENDIF IF ph EQ 0 THEN ASSERT SAMESTATE(0 5) ASSERT STATE(6) EQ 1 ASSERT STATE(7) EQ to ASSERT STATE(11) GTE 0 AND STATE(11) LT rng ASSERT VERIFYOUT(@INPUT @ADDRESS @AMOUNT+bt @TOKENID TRUE) RETURN TRUE ENDIF LET qk=PREVSTATE(8) LET pk=PREVSTATE(11) IF ph EQ 1 AND SIGNEDBY(hpk) THEN ASSERT SAMESTATE(0 5) ASSERT STATE(6) EQ 2 ASSERT SAMESTATE(7 11) LET hs=STATE(12) ASSERT SHA3(hs) EQ hc ASSERT VERIFYOUT(@INPUT @ADDRESS @AMOUNT @TOKENID TRUE) RETURN TRUE ENDIF IF ph EQ 1 AND @COINAGE GT to AND SIGNEDBY(qk) THEN RETURN TRUE ENDIF IF ph EQ 2 AND SIGNEDBY(qk) THEN LET ps=STATE(13) ASSERT SHA3(ps) EQ PREVSTATE(10) LET hs=PREVSTATE(12) LET h=SHA3(CONCAT(hs ps)) LET r=NUMBER(SUBSET(0 4 h))%rng IF r EQ pk THEN LET w=bt*po ASSERT VERIFYOUT(@INPUT PREVSTATE(9) w @TOKENID FALSE) IF @AMOUNT GT w THEN ASSERT VERIFYOUT(@INPUT+1 ha @AMOUNT-w @TOKENID FALSE) ENDIF ELSE ASSERT VERIFYOUT(@INPUT ha @AMOUNT @TOKENID FALSE) ENDIF RETURN TRUE ENDIF IF ph EQ 2 AND @COINAGE GT to AND SIGNEDBY(hpk) THEN RETURN TRUE ENDIF RETURN FALSE';
+var LIMIT_V1='IF SIGNEDBY(PREVSTATE(0)) THEN RETURN TRUE ENDIF ASSERT VERIFYOUT(@INPUT PREVSTATE(1) PREVSTATE(2) PREVSTATE(3) FALSE) RETURN TRUE';
+var LIMIT_V2='IF SIGNEDBY(PREVSTATE(0)) THEN RETURN TRUE ENDIF IF @COINAGE GT 10 THEN ASSERT VERIFYOUT(@INPUT PREVSTATE(1) @AMOUNT @TOKENID FALSE) RETURN TRUE ENDIF ASSERT VERIFYOUT(@INPUT PREVSTATE(1) PREVSTATE(2) PREVSTATE(3) FALSE) RETURN TRUE';
+var CASINO_ADDR='0xD65ADBBB7AB5032D794B02CF5E8814C720BE3C9562CC6C07081DE41CCA665A6F';
+var LIMIT_ADDR_V1='0x131609A5E510326354647E240F51C53825EFF8CA2B9DE07711EA56055E57672D';
+var LIMIT_ADDR_V2='0xE4D3F27BB044500AF56EF775DAFF3A12187EE79A8460FBBBF321F76A660D7797';
+var KNOWN_ADDRS={};
+KNOWN_ADDRS[CASINO_ADDR]='Casino';
+KNOWN_ADDRS[LIMIT_ADDR_V1]='Limit V1';
+KNOWN_ADDRS[LIMIT_ADDR_V2]='Limit V2';
+
+// Scripts that must NEVER have tracking disabled — user may stake/vest later
+var NEVER_DISABLE={
+  '0xC1B6743C6BB6241FDC03D351C952214483735B06FDFD1BDF016322DEDFA0D02A':'FutureCash (Maximize)',
+  '0x3C432D5099AB27EA901079EF54D9A97AB4DB3BD1CFFF670296C31B7C83C1C8BE':'Vesting Contract',
+  '0x5E8E33E1CA58587FA3D63B520732953A90A4452C34F12B431FB064DDD199D791':'Vault (Maximize)'
+};
+
+var MY_KEYS={};
+var ZOMBIE_PREFIXES=['take_','resolve_','autoreveal_','sweep_','timeout_','recover_','zc_'];
+var ZOMBIE_EXACT={'r1':1,'r2':1,'r3':1,'r4':1,'r5':1,'r6':1,'r7':1,'r8':1,'r9':1,'r10':1,'cx1':1,'cx2':1,'cx3':1,'cx4':1,'cx5':1,'cleanup':1,'cleanup1':1,'test1':1,'test2':1,'test3':1,'test':1};
+
+// Per-tab state
+var trackingData={scripts:[],foreignCoins:[]};
+var zombieData={foreign:[],mine:[],recoverable:[]};
+var txnData={all:[],stuck:[]};
+
+// ============================================================
+// HELPERS
+// ============================================================
+function esc(s){var d=document.createElement('div');d.textContent=String(s);return d.innerHTML}
+function tlog(tab,msg,cls){
+  var el=document.getElementById('log-'+tab);
+  el.innerHTML+='<div class="log-line '+(cls||'info')+'">'+esc(msg)+'</div>';
+  el.scrollTop=el.scrollHeight;
+}
+function getState(coin,port){
+  if(!coin.state)return'';
+  for(var i=0;i<coin.state.length;i++){if(coin.state[i].port===port||coin.state[i].port==port)return coin.state[i].data}
+  return'';
+}
+function isMyKey(pk){return MY_KEYS[pk]===true}
+function miniNum(n){return parseFloat(parseFloat(n).toFixed(8))}
+
+function switchTab(name){
+  document.querySelectorAll('.tab').forEach(function(t,i){
+    var panels=['tracking','zombies','txns','consolidate','tokens','health'];
+    t.classList.toggle('active',panels[i]===name);
+  });
+  document.querySelectorAll('.panel').forEach(function(p){p.classList.remove('active')});
+  document.getElementById('panel-'+name).classList.add('active');
+}
+
+// ============================================================
+// INIT
+// ============================================================
+MDS.init(function(msg){
+  if(msg.event==='inited'){
+    tlog('tracking','minArmyKnife v1.0.4 initialized','cyan');
+    // DO NOT register scripts here — newscript without track flag resets tracking to true
+    // Addresses are hardcoded. Scripts only registered with trackall:false in FIX actions.
+    MDS.cmd('keys',function(kres){
+      try{
+        var list=kres.response.keys||kres.response;
+        if(Array.isArray(list)){for(var i=0;i<list.length;i++){var pk=list[i].publickey||list[i];if(pk&&typeof pk==='string')MY_KEYS[pk]=true}}
+      }catch(e){}
+      tlog('tracking','Loaded '+Object.keys(MY_KEYS).length+' signing keys','ok');
+      tlog('tracking','Ready. Select a tab and scan.','ok');
+    });
+  }
+});
+
+// ============================================================
+// TAB 1: TRACKING AUDIT
+// ============================================================
+function scanTracking(){
+  document.getElementById('btnTrackScan').disabled=true;
+  document.getElementById('btnTrackFix').disabled=true;
+  trackingData={scripts:[],safeToDisable:[],foreignCoins:[],protectedScripts:[]};
+  tlog('tracking','','info');
+  tlog('tracking','=== SCANNING REGISTERED SCRIPTS ===','cyan');
+
+  MDS.cmd('scripts',function(res){
+    if(!res.status||!res.response){tlog('tracking','Failed to read scripts','err');document.getElementById('btnTrackScan').disabled=false;return}
+    var scripts=res.response;
+    var total=scripts.length,trackOn=0,nonWalletTracking=[];
+
+    scripts.forEach(function(s){
+      var isDefault=s.default===true||s.default==='true';
+      var isTracking=s.track===true||s.track==='true';
+      var label=KNOWN_ADDRS[s.address]||'';
+      if(isTracking)trackOn++;
+      if(isTracking&&!isDefault){
+        nonWalletTracking.push(s);
+      }
+    });
+
+    if(nonWalletTracking.length===0){
+      tlog('tracking','No non-wallet scripts with tracking enabled','ok');
+      finishTrackingScan(total,trackOn);
+      return;
+    }
+
+    // For each tracked non-wallet script, check if user has coins there
+    tlog('tracking','Checking '+nonWalletTracking.length+' tracked contract addresses...','info');
+    var checked=0;
+    nonWalletTracking.forEach(function(s){
+      var label=KNOWN_ADDRS[s.address]||'';
+      MDS.cmd('coins address:'+s.address,function(cres){
+        var mineCount=0,foreignCount=0;
+        if(cres.status&&cres.response){
+          cres.response.forEach(function(c){
+            var isMine=false;
+            (c.state||[]).forEach(function(st){if(st.type===1&&isMyKey(st.data))isMine=true});
+            if(isMine){mineCount++}
+            else{foreignCount++;trackingData.foreignCoins.push(c)}
+          });
+        }
+
+        // Calculate totals
+        var mineAmt=0,foreignAmt=0;
+        if(cres.status&&cres.response){
+          cres.response.forEach(function(c){
+            var amt=c.tokenid==='0x00'?parseFloat(c.amount):0;
+            var isMine=false;
+            (c.state||[]).forEach(function(st){if(st.type===1&&isMyKey(st.data))isMine=true});
+            if(isMine)mineAmt+=amt;else foreignAmt+=amt;
+          });
+        }
+
+        var neverDisable=NEVER_DISABLE[s.address];
+        if(neverDisable){
+          trackingData.protectedScripts.push(s);
+          var detail=mineCount>0?mineCount+' coins ('+mineAmt.toFixed(4)+' M)':'empty';
+          tlog('tracking','  '+s.address.substring(0,20)+'... '+neverDisable+' — '+detail+' — ALWAYS PROTECTED','ok');
+        }else if(mineCount>0){
+          trackingData.protectedScripts.push(s);
+          tlog('tracking','  '+s.address.substring(0,20)+'... '+(label||'Contract')+' — '+mineCount+' yours ('+mineAmt.toFixed(4)+' M)'+(foreignCount>0?', '+foreignCount+' foreign ('+foreignAmt.toFixed(4)+' M)':'')+' — PROTECTED','ok');
+        }else{
+          trackingData.safeToDisable.push(s);
+          if(foreignCount>0){
+            tlog('tracking','  '+s.address.substring(0,20)+'... '+(label||'Contract')+' — '+foreignCount+' foreign ('+foreignAmt.toFixed(4)+' M)','warn');
+          }else{
+            tlog('tracking','  '+s.address.substring(0,20)+'... '+(label||'Contract')+' — empty','warn');
+          }
+        }
+
+        checked++;
+        if(checked>=nonWalletTracking.length){
+          trackingData.scripts=nonWalletTracking;
+          finishTrackingScan(total,trackOn);
+        }
+      });
+    });
+  });
+}
+
+function finishTrackingScan(total,trackOn){
+  document.getElementById('trackTotal').textContent=total;
+  document.getElementById('trackOn').textContent=trackOn;
+  document.getElementById('trackForeign').textContent=trackingData.foreignCoins.length;
+  document.getElementById('btnTrackScan').disabled=false;
+  var fixable=trackingData.safeToDisable.length+trackingData.foreignCoins.length;
+  document.getElementById('btnTrackFix').disabled=fixable===0;
+  if(trackingData.protectedScripts.length>0){
+    tlog('tracking',trackingData.protectedScripts.length+' script'+(trackingData.protectedScripts.length>1?'s':'')+' protected (you have coins there — Maximize, vesting, etc.)','ok');
+  }
+  if(trackingData.safeToDisable.length>0){
+    tlog('tracking',trackingData.safeToDisable.length+' script'+(trackingData.safeToDisable.length>1?'s':'')+' safe to disable, '+trackingData.foreignCoins.length+' foreign coins to untrack','warn');
+  }
+  if(fixable===0&&trackingData.protectedScripts.length===0){
+    tlog('tracking','All clear — no dapp tracking active','ok');
+  }else if(fixable===0){
+    tlog('tracking','All tracked scripts have your coins — nothing to fix','ok');
+  }
+}
+
+function fixTracking(){
+  document.getElementById('btnTrackFix').disabled=true;
+  tlog('tracking','','info');
+  tlog('tracking','=== DISABLING TRACKING (safe scripts only) ===','cyan');
+  if(trackingData.protectedScripts.length>0){
+    tlog('tracking','Skipping '+trackingData.protectedScripts.length+' protected script'+(trackingData.protectedScripts.length>1?'s':'')+' (your coins are there)','ok');
+  }
+
+  var total=trackingData.safeToDisable.length+trackingData.foreignCoins.length;
+  var done=0,pendingDetected=false;
+
+  function progress(p){
+    if(p)pendingDetected=true;
+    done++;
+    if(done>=total){
+      if(pendingDetected)tlog('tracking','Done — approve pending items in Pending Actions, then SCAN again','warn');
+      else{tlog('tracking','Done — disabled '+trackingData.safeToDisable.length+' scripts, untracked '+trackingData.foreignCoins.length+' coins','ok');setTimeout(scanTracking,1500)}
+    }
+  }
+
+  // Only disable tracking on scripts with NO user coins
+  trackingData.safeToDisable.forEach(function(s){
+    var label=KNOWN_ADDRS[s.address]||'';
+    MDS.cmd('newscript script:"'+s.script+'" trackall:false',function(r){
+      var p=r&&r.pending;
+      tlog('tracking','  '+(p?'PENDING':'DISABLED')+' — '+s.address.substring(0,20)+'... '+(label||''),p?'warn':'ok');
+      progress(p);
+    });
+  });
+
+  // Untrack foreign coins (only from safe-to-disable addresses)
+  trackingData.foreignCoins.forEach(function(c){
+    MDS.cmd('cointrack enable:false coinid:'+c.coinid,function(r){
+      var p=r&&r.pending;
+      tlog('tracking','  '+(p?'PENDING':'UNTRACKED')+' — '+parseFloat(c.amount).toFixed(4)+' M',p?'warn':'ok');
+      progress(p);
+    });
+  });
+
+  if(total===0){tlog('tracking','Nothing to fix','ok')}
+}
+
+// ============================================================
+// TAB 2: ZOMBIE COIN CLEANER
+// ============================================================
+function scanZombieCoins(){
+  document.getElementById('btnZcScan').disabled=true;
+  document.getElementById('btnZcFix').disabled=true;
+  document.getElementById('btnZcSweep').disabled=true;
+  zombieData={foreign:[],mine:[],recoverable:[]};
+  tlog('zombies','','info');
+  tlog('zombies','=== SCANNING KNOWN CONTRACTS ===','cyan');
+
+  var addresses=[
+    {addr:CASINO_ADDR,label:'Casino',ports:[0,8]},
+    {addr:LIMIT_ADDR_V1,label:'Limit V1',ports:[0]},
+    {addr:LIMIT_ADDR_V2,label:'Limit V2',ports:[0]}
+  ];
+  var done=0;
+
+  addresses.forEach(function(target){
+    tlog('zombies','Querying '+target.label+' at '+target.addr.substring(0,16)+'...','info');
+    MDS.cmd('coins address:'+target.addr,function(cres){
+      if(cres.status&&cres.response){
+        var f=0,m=0;
+        cres.response.forEach(function(c){
+          var isMine=false;
+          target.ports.forEach(function(p){if(isMyKey(getState(c,p)))isMine=true});
+          if(isMine){zombieData.mine.push(c);m++}
+          else{zombieData.foreign.push(c);f++}
+        });
+        tlog('zombies','  '+target.label+': '+m+' mine, '+f+' foreign',f>0?'warn':'ok');
+      }else{tlog('zombies','  '+target.label+': query failed','err')}
+      done++;
+      if(done>=addresses.length){
+        var recoverAmt=0;
+        zombieData.recoverable=zombieData.mine.filter(function(c){return c.address!==CASINO_ADDR||parseInt(getState(c,6))===0});
+        zombieData.recoverable.forEach(function(c){if(c.tokenid==='0x00')recoverAmt+=parseFloat(c.amount)});
+        document.getElementById('zcForeign').textContent=zombieData.foreign.length;
+        document.getElementById('zcMine').textContent=zombieData.mine.length;
+        document.getElementById('zcRecover').textContent=recoverAmt.toFixed(2);
+        document.getElementById('btnZcFix').disabled=zombieData.foreign.length===0;
+        document.getElementById('btnZcSweep').disabled=zombieData.recoverable.length===0;
+        document.getElementById('btnZcScan').disabled=false;
+        if(zombieData.foreign.length===0)tlog('zombies','No foreign coins found','ok');
+        else tlog('zombies','Found '+zombieData.foreign.length+' foreign coins — click FIX to untrack','warn');
+      }
+    });
+  });
+}
+
+function fixZombieCoins(){
+  document.getElementById('btnZcFix').disabled=true;
+  tlog('zombies','','info');
+  tlog('zombies','=== FIXING ===','cyan');
+  var done=0,total=zombieData.foreign.length+zombieData.mine.length,pending=false;
+  function progress(p){if(p)pending=true;done++;if(done>=total){
+    tlog('zombies','Disabling tracking...','info');
+    MDS.cmd('newscript script:"'+CASINO_SCRIPT+'" trackall:false',function(r){tlog('zombies','  Casino: '+(r&&r.pending?'PENDING':'disabled'),r&&r.pending?'warn':'ok')});
+    MDS.cmd('newscript script:"'+LIMIT_V1+'" trackall:false',function(r){tlog('zombies','  Limit V1: '+(r&&r.pending?'PENDING':'disabled'),r&&r.pending?'warn':'ok')});
+    MDS.cmd('newscript script:"'+LIMIT_V2+'" trackall:false',function(r){tlog('zombies','  Limit V2: '+(r&&r.pending?'PENDING':'disabled'),r&&r.pending?'warn':'ok')});
+    if(pending)tlog('zombies','Approve pending items, then SCAN again','warn');
+    else{tlog('zombies','Done!','ok');setTimeout(scanZombieCoins,2000)}
+  }}
+  zombieData.mine.forEach(function(c){
+    MDS.cmd('cointrack enable:true coinid:'+c.coinid,function(r){
+      var p=r&&r.pending;
+      tlog('zombies','  '+(p?'PENDING':'TRACKED')+' — your coin '+parseFloat(c.amount).toFixed(4)+' M',p?'warn':'ok');
+      progress(p);
+    });
+  });
+  zombieData.foreign.forEach(function(c){
+    MDS.cmd('cointrack enable:false coinid:'+c.coinid,function(r){
+      var p=r&&r.pending;
+      tlog('zombies','  '+(p?'PENDING':'UNTRACKED')+' — foreign '+parseFloat(c.amount).toFixed(2)+' M',p?'warn':'ok');
+      progress(p);
+    });
+  });
+  if(total===0){tlog('zombies','Nothing to fix','ok')}
+}
+
+function sweepCoins(){
+  document.getElementById('btnZcSweep').disabled=true;
+  tlog('zombies','','info');
+  tlog('zombies','=== SWEEPING RECOVERABLE COINS ===','cyan');
+  if(zombieData.recoverable.length===0){tlog('zombies','Nothing to sweep','info');return}
+  MDS.cmd('getaddress',function(ares){
+    if(!ares.status){tlog('zombies','Failed to get address','err');return}
+    var myAddr=ares.response.miniaddress;
+    tlog('zombies','Sweeping to '+myAddr.substring(0,20)+'...','info');
+    var idx=0;
+    function next(){
+      if(idx>=zombieData.recoverable.length){tlog('zombies','Sweep complete!','ok');setTimeout(scanZombieCoins,2000);return}
+      var c=zombieData.recoverable[idx++];
+      if(!KNOWN_ADDRS[c.address]){tlog('zombies','  SKIP — unknown address','warn');setTimeout(next,100);return}
+      var signKey=isMyKey(getState(c,0))?getState(c,0):(isMyKey(getState(c,8))?getState(c,8):'auto');
+      var txid='zc_'+Date.now();
+      MDS.cmd('txncreate id:'+txid,function(r0){
+        if(!r0.status){tlog('zombies','  FAIL create','err');setTimeout(next,100);return}
+        MDS.cmd('txninput id:'+txid+' coinid:'+c.coinid,function(r1){
+          if(!r1.status){MDS.cmd('txndelete id:'+txid);tlog('zombies','  FAIL input','err');setTimeout(next,100);return}
+          MDS.cmd('txnoutput id:'+txid+' amount:'+c.amount+' address:'+myAddr+' storestate:false',function(r2){
+            if(!r2.status){MDS.cmd('txndelete id:'+txid);tlog('zombies','  FAIL output','err');setTimeout(next,100);return}
+            MDS.cmd('txnsign id:'+txid+' publickey:'+signKey,function(rs){
+              if(!rs.status&&!rs.pending){MDS.cmd('txndelete id:'+txid);tlog('zombies','  SKIP — cannot sign','warn');setTimeout(next,100);return}
+              if(rs.pending){tlog('zombies','  PENDING — approve in Pending Actions','warn');setTimeout(next,100);return}
+              MDS.cmd('txnbasics id:'+txid+';txnpost id:'+txid,function(rp){
+                var r=Array.isArray(rp)?rp[rp.length-1]:rp;
+                if(r&&r.status){tlog('zombies','  OK — swept '+parseFloat(c.amount).toFixed(4)+' M','ok')}
+                else{MDS.cmd('txndelete id:'+txid);tlog('zombies','  FAIL — '+(r?r.error||'':''),'err')}
+                setTimeout(next,300);
+              });
+            });
+          });
+        });
+      });
+    }
+    next();
+  });
+}
+
+// ============================================================
+// TAB 3: STUCK TRANSACTIONS
+// ============================================================
+function scanTxns(){
+  document.getElementById('btnTxnScan').disabled=true;
+  document.getElementById('btnTxnFix').disabled=true;
+  txnData={all:[],stuck:[]};
+  tlog('txns','','info');
+  tlog('txns','=== SCANNING TRANSACTION LIST ===','cyan');
+
+  MDS.cmd('txnlist',function(res){
+    if(!res.status||!res.response){tlog('txns','Failed to read txnlist','err');document.getElementById('btnTxnScan').disabled=false;return}
+    txnData.all=res.response;
+    tlog('txns','Total transactions in list: '+txnData.all.length,'info');
+
+    txnData.all.forEach(function(tx){
+      if(!tx.id)return;
+      // Check if it has signatures — if not, it's stuck
+      var hasSigs=false;
+      try{
+        var sigs=tx.witness&&tx.witness.signatures;
+        if(sigs&&sigs.length>0&&sigs[0]&&sigs[0].signatures&&sigs[0].signatures.length>0)hasSigs=true;
+      }catch(e){}
+
+      // Check known zombie prefixes
+      var isKnownZombie=false;
+      ZOMBIE_PREFIXES.forEach(function(p){if(tx.id.indexOf(p)===0)isKnownZombie=true});
+      if(ZOMBIE_EXACT[tx.id])isKnownZombie=true;
+
+      // Check if txn has any witness data (pending actions have partial witness, abandoned txns have none)
+      var hasWitness=false;
+      try{if(tx.witness&&tx.witness.signatures&&tx.witness.signatures.length>0)hasWitness=true}catch(e){}
+
+      if(isKnownZombie){
+        txnData.stuck.push(tx);
+        tlog('txns','  '+tx.id+' — zombie (known prefix)','warn');
+      }else if(!hasSigs&&!hasWitness){
+        txnData.stuck.push(tx);
+        tlog('txns','  '+tx.id+' — abandoned (no witness data)','warn');
+      }else if(!hasSigs&&hasWitness){
+        tlog('txns','  '+tx.id+' — awaiting signature (may be pending action)','info');
+      }else{
+        tlog('txns','  '+tx.id+' — signed (live)','ok');
+      }
+    });
+
+    document.getElementById('txnTotal').textContent=txnData.all.length;
+    document.getElementById('txnStuck').textContent=txnData.stuck.length;
+    document.getElementById('btnTxnScan').disabled=false;
+    document.getElementById('btnTxnFix').disabled=txnData.stuck.length===0;
+    if(txnData.stuck.length===0)tlog('txns','No stuck transactions found','ok');
+    else tlog('txns',txnData.stuck.length+' stuck transactions — click DELETE to remove','warn');
+  });
+}
+
+function fixTxns(){
+  document.getElementById('btnTxnFix').disabled=true;
+  tlog('txns','','info');
+  tlog('txns','=== DELETING STUCK TRANSACTIONS ===','cyan');
+  var done=0,pending=false;
+  txnData.stuck.forEach(function(tx){
+    MDS.cmd('txndelete id:'+tx.id,function(r){
+      var p=r&&r.pending;
+      if(p)pending=true;
+      tlog('txns','  '+(p?'PENDING':r.status?'DELETED':'FAIL')+' — '+tx.id,p?'warn':r.status?'ok':'err');
+      done++;
+      if(done>=txnData.stuck.length){
+        if(pending)tlog('txns','Approve pending items, then SCAN again','warn');
+        else{tlog('txns','Deleted '+txnData.stuck.length+' transactions','ok');setTimeout(scanTxns,1000)}
+      }
+    });
+  });
+}
+
+// ============================================================
+// TAB 4: COIN CONSOLIDATION
+// ============================================================
+function scanCoins(){
+  document.getElementById('btnCoinScan').disabled=true;
+  document.getElementById('btnConsolidate').disabled=true;
+  tlog('consolidate','','info');
+  tlog('consolidate','=== SCANNING YOUR MINIMA COINS ===','cyan');
+
+  MDS.cmd('balance',function(bres){
+    if(!bres.status){tlog('consolidate','Failed to read balance','err');document.getElementById('btnCoinScan').disabled=false;return}
+    var sendable=bres.response[0].sendable;
+    var confirmed=bres.response[0].confirmed;
+    var coinCount=parseInt(bres.response[0].coins)||0;
+    var locked=parseFloat(confirmed)-parseFloat(sendable);
+
+    tlog('consolidate','Sendable: '+sendable+' M','ok');
+    tlog('consolidate','Confirmed: '+confirmed+' M','info');
+    if(locked>0.001)tlog('consolidate','Locked: '+locked.toFixed(4)+' M (contract coins, staking, bets)','info');
+    tlog('consolidate','Coin UTXOs: '+coinCount,'info');
+
+    document.getElementById('coinCount').textContent=coinCount;
+    document.getElementById('coinBalance').textContent=parseFloat(sendable).toFixed(2);
+    document.getElementById('btnCoinScan').disabled=false;
+    document.getElementById('btnConsolidate').disabled=coinCount<=5;
+    document.getElementById('btnSplit').disabled=parseFloat(sendable)<=0;
+    if(coinCount<=5)tlog('consolidate','Coin count is fine — no consolidation needed','ok');
+    else if(coinCount<=20)tlog('consolidate','Coin count is OK','ok');
+    else tlog('consolidate',coinCount+' coins — consolidation recommended','warn');
+  });
+}
+
+function consolidateCoins(){
+  document.getElementById('btnConsolidate').disabled=true;
+  tlog('consolidate','','info');
+  tlog('consolidate','=== CONSOLIDATING ===','cyan');
+  tlog('consolidate','Merging Minima coins into fewer UTXOs...','info');
+
+  MDS.cmd('consolidate tokenid:0x00',function(res){
+    if(res.pending){tlog('consolidate','PENDING — approve in Pending Actions','warn')}
+    else if(res.status){tlog('consolidate','Consolidation sent! Wait 1-2 blocks then SCAN again.','ok')}
+    else{tlog('consolidate','Failed: '+(res.error||'unknown'),'err')}
+    // Keep button disabled until next scan to prevent double-send
+  });
+}
+
+function splitCoins(){
+  document.getElementById('btnSplit').disabled=true;
+  tlog('consolidate','','info');
+  tlog('consolidate','=== SPLITTING ===','cyan');
+
+  MDS.cmd('balance',function(bres){
+    if(!bres.status){tlog('consolidate','Failed to get balance','err');document.getElementById('btnSplit').disabled=false;return}
+    var sendable=String(bres.response[0].sendable);
+    if(parseFloat(sendable)<=0){tlog('consolidate','No sendable balance','err');document.getElementById('btnSplit').disabled=false;return}
+    MDS.cmd('getaddress',function(ares){
+      if(!ares.status){tlog('consolidate','Failed to get address','err');document.getElementById('btnSplit').disabled=false;return}
+      var addr=ares.response.miniaddress;
+      tlog('consolidate','Sending '+sendable+' M to '+addr+' split:10','info');
+      MDS.cmd('send amount:'+sendable+' address:'+addr+' split:10',function(sres){
+        if(sres.pending){tlog('consolidate','PENDING — approve in Pending Actions','warn')}
+        else if(sres.status){tlog('consolidate','Split sent! Balance will become 10 equal coins after confirmation.','ok');tlog('consolidate','Wait 1-2 blocks then SCAN again.','info')}
+        else{tlog('consolidate','Failed: '+(sres.error||'unknown'),'err')}
+        // Keep disabled until next scan
+      });
+    });
+  });
+}
+
+// ============================================================
+// TAB 5: TOKEN DUST
+// ============================================================
+function scanTokens(){
+  document.getElementById('btnTokenScan').disabled=true;
+  tlog('tokens','','info');
+  tlog('tokens','=== SCANNING TOKENS ===','cyan');
+
+  MDS.cmd('balance',function(res){
+    if(!res.status||!res.response){tlog('tokens','Failed to read balance','err');document.getElementById('btnTokenScan').disabled=false;return}
+    var tokens=res.response.filter(function(t){return t.tokenid!=='0x00'});
+    var dust=0;
+
+    if(tokens.length===0){
+      tlog('tokens','No tokens found','ok');
+    }else{
+      tokens.forEach(function(t){
+        var name='Unknown';
+        try{name=typeof t.token==='object'?(t.token.name&&typeof t.token.name==='object'?t.token.name.name:t.token.name):t.token||'Unknown'}catch(e){}
+        var conf=parseFloat(t.confirmed)||0;
+        var isDust=conf<1;
+        if(isDust)dust++;
+        tlog('tokens',
+          '  '+name+' — '+t.confirmed+(isDust?' (dust)':'')+' — '+t.coins+' coin'+(t.coins>1?'s':''),
+          isDust?'warn':'info'
+        );
+        tlog('tokens','    tokenid: '+t.tokenid.substring(0,24)+'...','info');
+      });
+    }
+
+    document.getElementById('tokenCount').textContent=tokens.length;
+    document.getElementById('tokenDust').textContent=dust;
+    document.getElementById('btnTokenScan').disabled=false;
+    if(dust>0)tlog('tokens',dust+' dust token'+(dust>1?'s':'')+' found','warn');
+    else tlog('tokens','No dust tokens','ok');
+  });
+}
+
+// ============================================================
+// TAB 6: BALANCE HEALTH CHECK
+// ============================================================
+function checkHealth(){
+  document.getElementById('btnHealthCheck').disabled=true;
+  tlog('health','','info');
+  tlog('health','=== RUNNING HEALTH CHECK ===','cyan');
+
+  MDS.cmd('balance',function(bres){
+    if(!bres.status){tlog('health','Failed to read balance','err');document.getElementById('btnHealthCheck').disabled=false;return}
+    var confirmed=parseFloat(bres.response[0].confirmed);
+    var sendable=parseFloat(bres.response[0].sendable);
+    var locked=confirmed-sendable;
+    var coins=parseInt(bres.response[0].coins);
+
+    tlog('health','Balance confirmed: '+confirmed.toFixed(4)+' M','info');
+    tlog('health','Balance sendable:  '+sendable.toFixed(4)+' M','info');
+    tlog('health','Locked (confirmed - sendable): '+locked.toFixed(4)+' M',locked>0?'warn':'ok');
+    tlog('health','Coin UTXOs: '+coins,'info');
+
+    // Compare with actual coins — use coins relevant:true to get ALL tracked Minima
+    MDS.cmd('coins relevant:true',function(cres){
+      if(!cres.status||!cres.response){tlog('health','Failed to read coins','err');document.getElementById('btnHealthCheck').disabled=false;return}
+
+      // Sum only Minima coins (not tokens)
+      var minimaCoins=cres.response.filter(function(c){return c.tokenid==='0x00'});
+      var totalFromCoins=0,walletCoins=0,walletTotal=0,contractCoins=0,contractTotal=0;
+
+      minimaCoins.forEach(function(c){
+        var amt=parseFloat(c.amount);
+        totalFromCoins+=amt;
+        // Contract coins have storestate:true OR state data OR are at known contract addresses
+        var isContract=(c.storestate===true||c.storestate==='true')||(c.state&&c.state.length>0)||KNOWN_ADDRS[c.address];
+        if(isContract){contractCoins++;contractTotal+=amt}
+        else{walletCoins++;walletTotal+=amt}
+      });
+
+      tlog('health','','info');
+      tlog('health','Coins breakdown:','cyan');
+      tlog('health','  Wallet coins: '+walletCoins+' = '+walletTotal.toFixed(4)+' M','ok');
+      tlog('health','  Contract coins: '+contractCoins+' = '+contractTotal.toFixed(4)+' M',contractCoins>0?'info':'ok');
+      tlog('health','  Total from coins: '+totalFromCoins.toFixed(4)+' M','info');
+
+      // Balance confirmed should roughly match total from coins
+      var diff=Math.abs(confirmed-totalFromCoins);
+      tlog('health','','info');
+      tlog('health','Balance confirmed:  '+confirmed.toFixed(4)+' M','info');
+      tlog('health','Coins total:        '+totalFromCoins.toFixed(4)+' M','info');
+      if(diff<0.01){
+        tlog('health','Balance matches coins — healthy','ok');
+        document.getElementById('healthStatus').textContent='OK';
+        document.getElementById('healthStatus').style.color='var(--green)';
+      }else{
+        tlog('health','DISCREPANCY: '+diff.toFixed(4)+' M difference','err');
+        tlog('health','Possible causes: foreign tracked coins inflating balance, or untracked coins missing from total.','warn');
+        tlog('health','Run TRACKING AUDIT to check for foreign coins.','warn');
+        document.getElementById('healthStatus').textContent='!!';
+        document.getElementById('healthStatus').style.color='var(--pink)';
+      }
+
+      // Node status
+      MDS.cmd('status',function(sres){
+        if(sres.status){
+          var chain=sres.response.chain;
+          tlog('health','','info');
+          tlog('health','Node status:','cyan');
+          tlog('health','  Block: '+chain.block,'info');
+          tlog('health','  Speed: '+(1/chain.speed).toFixed(1)+' s/block','info');
+          tlog('health','  Connections: '+(sres.response.network?sres.response.network.connected||'?':'?'),'info');
+        }
+        document.getElementById('healthBalance').textContent=confirmed.toFixed(0);
+        document.getElementById('healthCoins').textContent=totalFromCoins.toFixed(0);
+        document.getElementById('btnHealthCheck').disabled=false;
+      });
+    });
+  });
+}
+</script>
+</body>
+</html>
