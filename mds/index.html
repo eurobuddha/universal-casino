@@ -648,6 +648,14 @@ function loadHistory(cb){MDS.keypair.get("casino_history",function(r){if(r.statu
 
 function esc(s){var d=document.createElement('div');d.textContent=String(s);return d.innerHTML}
 function miniNum(v){return parseFloat(parseFloat(v).toFixed(8))}
+// EXACT decimal math (BigInt, no float/round) — a coin's amount carries FULL precision (up to 44dp). A txn output
+// must equal the exact remainder; rounding the change UP makes outputs exceed inputs and the node rejects the take
+// (validamounts:false). NEVER miniNum() an amount that has to balance against a real coin.
+function _dsplit(s){var p=String(s==null?"0":s).split(".");return[p[0]||"0",p[1]||""]}
+function _dfmt(d,dp){if(dp===0)return d;d=d.padStart(dp+1,"0");var o=(d.slice(0,-dp)+"."+d.slice(-dp)).replace(/(\.\d*?)0+$/,"$1").replace(/\.$/,"");return o===""?"0":o}
+function decAdd(a,b){var A=_dsplit(a),B=_dsplit(b),dp=Math.max(A[1].length,B[1].length);try{return _dfmt((BigInt(A[0]+A[1].padEnd(dp,"0"))+BigInt(B[0]+B[1].padEnd(dp,"0"))).toString(),dp)}catch(e){return String(parseFloat(a)+parseFloat(b))}}
+function decSub(a,b){var A=_dsplit(a),B=_dsplit(b),dp=Math.max(A[1].length,B[1].length),o;try{o=BigInt(A[0]+A[1].padEnd(dp,"0"))-BigInt(B[0]+B[1].padEnd(dp,"0"))}catch(e){return String(Math.max(0,parseFloat(a)-parseFloat(b)))}if(o<0n)o=0n;return _dfmt(o.toString(),dp)}
+function decCmp(a,b){var A=_dsplit(a),B=_dsplit(b),dp=Math.max(A[1].length,B[1].length),X,Y;try{X=BigInt(A[0]+A[1].padEnd(dp,"0"));Y=BigInt(B[0]+B[1].padEnd(dp,"0"))}catch(e){var d=parseFloat(a)-parseFloat(b);return d<0?-1:d>0?1:0}return X<Y?-1:X>Y?1:0}
 
 function getState(coin,port){
   if(!coin.state)return"";
@@ -1177,7 +1185,7 @@ function takeBet(coinid,statusId,btnEl){
   if(!MY_PUBKEY||!MY_HEX_ADDR){showErr(document.getElementById(statusId),"Identity not loaded");return}
   var coin=BETS.find(function(c){return c.coinid===coinid});if(!coin)return;
   TAKING[coinid]=true;if(btnEl)btnEl.classList.add("btn--disabled");
-  var bet=getState(coin,5),total=miniNum(parseFloat(coin.amount)+parseFloat(bet)),pick=CARD_PICKS[coinid]||0;
+  var bet=getState(coin,5),total=decAdd(coin.amount,bet),pick=CARD_PICKS[coinid]||0;
   var tRange=parseInt(getState(coin,3))||2,tGt=gameType(tRange),tPickLabel=pickLabel(tRange,pick);
   var txid="take_"+Date.now(),statusEl=document.getElementById(statusId);
   showPending(statusEl,"Generating secret...");
@@ -1198,7 +1206,7 @@ function takeBet(coinid,statusId,btnEl){
                 if(!ok){showErr(statusEl,"fund input failed",txid);delete TAKING[coinid];return}
                 MDS.cmd("txnoutput id:"+txid+" amount:"+total+" address:"+SCRIPT_ADDR+" storestate:true",function(r3){
                   if(!r3.status){showErr(statusEl,"output failed",txid);delete TAKING[coinid];return}
-                  var change=miniNum(result.total-parseFloat(bet));
+                  var change=decSub(result.coins.reduce(function(acc,fc){return decAdd(acc,fc.amount)},"0"),bet);
                   var afterChange=function(){
                     var states=[[0,getState(coin,0)],[1,getState(coin,1)],[2,getState(coin,2)],[3,getState(coin,3)],[4,getState(coin,4)],[5,getState(coin,5)],[6,"1"],[7,getState(coin,7)],[8,MY_PUBKEY],[9,MY_HEX_ADDR],[10,commit],[11,""+pick]];
                     setStates(txid,states,0,function(){
@@ -1213,7 +1221,7 @@ function takeBet(coinid,statusId,btnEl){
                       });
                     });
                   };
-                  if(change>0.000001){MDS.cmd("txnoutput id:"+txid+" amount:"+change+" address:"+MY_HEX_ADDR+" storestate:false",function(rc){if(!rc.status){showErr(statusEl,"change output failed",txid);delete TAKING[coinid];return}afterChange()})}
+                  if(decCmp(change,"0.000001")>0){MDS.cmd("txnoutput id:"+txid+" amount:"+change+" address:"+MY_HEX_ADDR+" storestate:false",function(rc){if(!rc.status){showErr(statusEl,"change output failed",txid);delete TAKING[coinid];return}afterChange()})}
                   else{afterChange()}
                 });
               });
