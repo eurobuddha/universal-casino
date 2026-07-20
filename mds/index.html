@@ -104,7 +104,7 @@ body::after{
 }
 .card:hover{border-color:rgba(255,215,0,.25);box-shadow:var(--shadow-lg)}
 /* Shimmer effect for waiting cards */
-.card--waiting::before{
+.card--waiting::before{pointer-events:none;
   content:'';position:absolute;inset:0;
   background:linear-gradient(110deg,transparent 30%,rgba(255,215,0,.04) 50%,transparent 70%);
   background-size:200% 100%;animation:shimmer 2.5s infinite;
@@ -389,6 +389,10 @@ body::after{
 <body>
 <div class="shell">
 
+  <div style="background:rgba(255,45,120,.12);border:1px solid var(--pink);border-radius:var(--radius);padding:8px 12px;margin-bottom:10px;font-family:var(--mono);font-size:11px;color:var(--pink);line-height:1.5;text-align:center">
+    <b>WARNING:</b> You MUST play this game as a <b>MiniDapp</b> (installed in MiniHub) or via <b>PocketWeb</b>. If you use MiniWeb or close the app mid-game, your bet <b>will not resolve</b> and you <b>WILL LOSE your stake</b>. Both players must keep the casino open until the bet completes.
+  </div>
+
   <header class="hdr">
     <div class="hdr__title">ZERO EDGE CASINO</div>
     <span class="hdr__sub">Provably Fair On-Chain</span>
@@ -602,15 +606,27 @@ var PRESETS={
 var SCRIPT_ADDR="0xD65ADBBB7AB5032D794B02CF5E8814C720BE3C9562CC6C07081DE41CCA665A6F",MY_PUBKEY="",MY_HEX_ADDR="",MY_ADDR="",MY_KEYS={};
 var DB_READY=false,BETS=[],SELECTED_PRESET="flip",CARD_PICKS={};
 var PENDING_TXS={},AUTO_BUSY={},TAKING={},PENDING_CREATE=false;
-var PREV_BETS=[],PENDING_RESULTS=[],RESOLVED_BETS=[];
+var AUTO_POSTED={},REPOST_AFTER=8;
+var PREV_BETS=[],PENDING_RESULTS=[],RESOLVED_BETS=[],CUR_BLOCK=0;
 
 // Secret storage — in-memory (always works) + localStorage + MDS.keypair
 var SECRET_CACHE={};
+// FUND-SAFETY: the commit preimage MUST be durably in MDS.keypair (the headless service.js reads ONLY from there)
+// BEFORE the committing send/take — a lost preimage means we can never reveal/resolve and the counterparty
+// timeout-claims the whole pot. So we don't fake success on a timeout any more: we write, then READ IT BACK to
+// confirm it persisted, and cb(err) on any failure so createBet/takeBet ABORT before committing funds. cb(null)=ok.
 function saveSecret(key,value,cb){
   SECRET_CACHE[key]=value;
   try{localStorage.setItem(key,value)}catch(e){}
-  MDS.keypair.set(key,value);
-  if(cb)cb();
+  var done=false;
+  var finish=function(err){if(done)return;done=true;if(cb)cb(err)};
+  MDS.keypair.set(key,value,function(){
+    MDS.keypair.get(key,function(g){
+      if(g&&g.value===value)finish(null);
+      else finish("Could not save the bet secret — aborting to protect your funds");
+    });
+  });
+  setTimeout(function(){finish("Saving the bet secret timed out — aborting to protect your funds")},8000);
 }
 function getSecret(key,cb){
   if(SECRET_CACHE[key]){cb({value:SECRET_CACHE[key]});return}
@@ -685,8 +701,19 @@ function clearPendingStatus(){
   }
 }
 
+// A genuine payout coin: NEW (created at/after the bet resolved) + the win value + at the bet's
+// payout address (state[1] house / state[9] player). The old "any wallet coin of this value" test
+// false-positived on unrelated/pre-existing coins, inverting the win/lose result.
+function coinIsPayout(c,pr,amt){
+  var created=parseInt(c.created);
+  if(isNaN(created)||created<((pr.atBlock||0)-2))return false;          // must be a fresh coin
+  if(Math.abs(parseFloat(c.amount)-amt)>=0.001)return false;           // of the payout value
+  if(pr.winAddr){var ca=c.address||"",cm=c.miniaddress||"";return ca===pr.winAddr||cm===pr.winAddr}
+  return true;                                                         // no addr captured: created+value still far safer
+}
 function resolvePendingResults(){
   if(PENDING_RESULTS.length===0)return;
+  loadHistory(function(){   // pick up EXACT results the background service recorded, so they de-dup below
   MDS.cmd("coins relevant:true tokenid:0x00",function(res){
     if(!res.status||!res.response)return;
     var walletCoins=res.response.filter(function(c){return!c.state||c.state.length===0});
@@ -698,11 +725,11 @@ function resolvePendingResults(){
       var iWon=false,profit;
       if(pr.role==='House'){
         var potAmt=parseFloat(pr.amount);
-        var foundPot=walletCoins.some(function(c){return Math.abs(parseFloat(c.amount)-potAmt)<0.001});
+        var foundPot=walletCoins.some(function(c){return coinIsPayout(c,pr,potAmt)});
         iWon=foundPot;profit=iWon?parseFloat(pr.bet):miniNum(parseFloat(pr.bet)*(pr.payout-1));
       }else{
         var winAmt=miniNum(parseFloat(pr.bet)*pr.payout);
-        var foundWin=walletCoins.some(function(c){return Math.abs(parseFloat(c.amount)-winAmt)<0.001});
+        var foundWin=walletCoins.some(function(c){return coinIsPayout(c,pr,winAmt)});
         iWon=foundWin;profit=iWon?miniNum(winAmt-parseFloat(pr.bet)):parseFloat(pr.bet);
       }
       var prPickLabel=(pr.pickIdx>=0)?pickLabel(pr.range,pr.pickIdx):'\u2014';
@@ -717,6 +744,7 @@ function resolvePendingResults(){
     });
     toRemove.sort(function(a,b){return b-a}).forEach(function(i){PENDING_RESULTS.splice(i,1)});
     if(toRemove.length>0)renderHistory();
+  });
   });
 }
 
@@ -824,8 +852,9 @@ function cleanupZombieTxns(){
 
 // ===== MDS INIT =====
 MDS.init(function(msg){
-  if(msg.event==="inited")initApp();
+  if(msg.event==="inited"){initApp();setInterval(function(){MDS.keypair.set("casino_tab_hb",""+Date.now())},5000)}
   if(msg.event==="NEWBLOCK"){
+    MDS.keypair.set("casino_tab_hb",""+Date.now());   // foreground heartbeat — the service auto-processes only while this is stale
     updateBlock(msg);
     if(DB_READY){refreshBets();refreshBalance();autoProcess();if(PENDING_RESULTS.length>0)resolvePendingResults()}
     if(Object.keys(PENDING_TXS).length>0)checkPendingComplete();
@@ -837,7 +866,7 @@ MDS.init(function(msg){
 
 function initApp(){
   MDS.cmd('newscript script:"'+SCRIPT+'"');
-  MDS.cmd("block",function(res){if(res.status)document.getElementById("blockHeight").innerText="#"+res.response.block});
+  MDS.cmd("block",function(res){if(res.status){CUR_BLOCK=parseInt(res.response.block)||CUR_BLOCK;document.getElementById("blockHeight").innerText="#"+res.response.block}});
   loadIdentity(function(){finishInit()});
   setupUI();
 }
@@ -885,7 +914,7 @@ function finishInit(){
   loadWalletKeys(function(){loadHistory(function(){
     DB_READY=true;
     cleanupZombieTxns();
-    MDS.log("ZEC v2.5.5 ready. Script="+SCRIPT_ADDR+" Keys="+Object.keys(MY_KEYS).length);
+    MDS.log("ZEC v2.8.3 ready. Script="+SCRIPT_ADDR+" Keys="+Object.keys(MY_KEYS).length);
     logActivity("Casino ready \u2014 "+Object.keys(MY_KEYS).length+" keys loaded","info");
     refreshBets();refreshBalance();updateSummary();
   })});
@@ -937,7 +966,7 @@ function updateSummary(){
   document.getElementById("btnCreate").innerText="CREATE BET \u2014 LOCK "+stake.toFixed(2);
 }
 
-function updateBlock(msg){document.getElementById("blockHeight").innerText="#"+parseInt(msg.data.txpow.header.block)}
+function updateBlock(msg){CUR_BLOCK=parseInt(msg.data.txpow.header.block)||CUR_BLOCK;document.getElementById("blockHeight").innerText="#"+CUR_BLOCK}
 
 function refreshBalance(){
   MDS.cmd("balance",function(res){
@@ -960,18 +989,19 @@ function refreshBets(){
         if(phase===2&&amHouse&&!amPlayer){
           var range=parseInt(getState(old,3))||2,payout=parseInt(getState(old,4))||2,bet=getState(old,5)||"0";
           var pk2=parseInt(getState(old,11));
-          PENDING_RESULTS.push({coinid:old.coinid,role:'House',range:range,payout:payout,bet:bet,amount:parseFloat(old.amount),game:gameType(range).name,pickIdx:pk2,time:Date.now()});
+          PENDING_RESULTS.push({coinid:old.coinid,role:'House',range:range,payout:payout,bet:bet,amount:parseFloat(old.amount),game:gameType(range).name,pickIdx:pk2,time:Date.now(),winAddr:getState(old,1),atBlock:CUR_BLOCK});
         }
         if(phase===2&&amPlayer&&!amHouse){
           var rng=parseInt(getState(old,3))||2,bt=getState(old,5)||"0";
           var pk3=parseInt(getState(old,11));
-          PENDING_RESULTS.push({coinid:old.coinid,role:'Player',range:rng,payout:parseInt(getState(old,4))||2,bet:bt,amount:parseFloat(old.amount),game:gameType(rng).name,pickIdx:pk3,time:Date.now()});
+          PENDING_RESULTS.push({coinid:old.coinid,role:'Player',range:rng,payout:parseInt(getState(old,4))||2,bet:bt,amount:parseFloat(old.amount),game:gameType(rng).name,pickIdx:pk3,time:Date.now(),winAddr:getState(old,9),atBlock:CUR_BLOCK});
         }
       });
     }
     PREV_BETS=newBets.map(function(c){return{coinid:c.coinid,amount:c.amount,state:c.state,age:c.age}});
     BETS=newBets;
     Object.keys(AUTO_BUSY).forEach(function(id){var found=false;BETS.forEach(function(c){if(c.coinid===id)found=true});if(!found)delete AUTO_BUSY[id]});
+    Object.keys(AUTO_POSTED).forEach(function(id){var found=false;BETS.forEach(function(c){if(c.coinid===id)found=true});if(!found)delete AUTO_POSTED[id]});
     Object.keys(TAKING).forEach(function(id){var coin=BETS.find(function(c){return c.coinid===id});if(!coin||parseInt(getState(coin,6))!==0)delete TAKING[id]});
     // Detect create bet confirmed (new phase-0 coin where we're house)
     if(PENDING_CREATE&&PREV_BETS.length>0){
@@ -1099,7 +1129,8 @@ function createBet(){
     var secret=extractResponse(rres);if(!secret){showErr(statusEl,"Random failed");btn.classList.remove("btn--disabled");return}
     MDS.cmd("hash data:"+secret,function(hres){
       var commit=extractResponse(hres);if(!commit){showErr(statusEl,"Hash failed");btn.classList.remove("btn--disabled");return}
-      saveSecret("casino_secret_for_"+commit,secret,function(){
+      saveSecret("casino_secret_for_"+commit,secret,function(serr){
+        if(serr){showErr(statusEl,serr);btn.classList.remove("btn--disabled");return}
         var stateObj='{"0":"'+MY_PUBKEY+'","1":"'+MY_HEX_ADDR+'","2":"'+commit+'","3":"'+p.range+'","4":"'+p.payout+'","5":"'+bet+'","6":"0","7":"'+TIMEOUT_BLOCKS+'"}';
         var cmd="send amount:"+stake+" address:"+SCRIPT_ADDR+" state:"+stateObj;
         statusEl.innerText="Sending...";
@@ -1154,7 +1185,8 @@ function takeBet(coinid,statusId,btnEl){
     var secret=extractResponse(rres);if(!secret){showErr(statusEl,"Random failed");delete TAKING[coinid];return}
     MDS.cmd("hash data:"+secret,function(hres){
       var commit=extractResponse(hres);if(!commit){showErr(statusEl,"Hash failed");delete TAKING[coinid];return}
-      saveSecret("casino_psecret_for_"+commit,secret,function(){
+      saveSecret("casino_psecret_for_"+commit,secret,function(serr){
+        if(serr){showErr(statusEl,serr);delete TAKING[coinid];return}
         findCoins("0x00",parseFloat(bet),coinid,function(result){
           if(!result){showErr(statusEl,"Insufficient Minima (need "+bet+")");delete TAKING[coinid];return}
           statusEl.innerText="Building transaction...";
@@ -1311,6 +1343,8 @@ function doPlayerResolve(coinid,statusId,btnEl){
 function claimTimeout(coinid,statusId,btnEl){
   var coin=BETS.find(function(c){return c.coinid===coinid});if(!coin)return;
   if(btnEl)btnEl.classList.add("btn--disabled");
+  var phase=parseInt(getState(coin,6))||0;
+  var signKey=phase===1?getState(coin,8):getState(coin,0);
   var txid="timeout_"+Date.now(),statusEl=document.getElementById(statusId);
   showPending(statusEl,"Claiming timeout...");
   MDS.cmd("txncreate id:"+txid,function(r0){
@@ -1319,7 +1353,7 @@ function claimTimeout(coinid,statusId,btnEl){
       if(!r1.status){showErr(statusEl,"input failed",txid);if(btnEl)btnEl.classList.remove("btn--disabled");return}
       MDS.cmd("txnoutput id:"+txid+" amount:"+coin.amount+" address:"+MY_HEX_ADDR+" storestate:false",function(r2){
         if(!r2.status){showErr(statusEl,"output failed",txid);if(btnEl)btnEl.classList.remove("btn--disabled");return}
-        MDS.cmd("txnsign id:"+txid+" publickey:auto",function(rs){
+        MDS.cmd("txnsign id:"+txid+" publickey:"+signKey,function(rs){
           if(isPending(rs)){showPending(statusEl,"Timeout pending \u2014 approve",txid);return}
           MDS.cmd("txnbasics id:"+txid+";txnpost id:"+txid,function(resArr){
             var rp=Array.isArray(resArr)?resArr[resArr.length-1]:resArr;
@@ -1394,13 +1428,15 @@ function autoProcess(){
     var coin=BETS[i],phase=parseInt(getState(coin,6))||0,coinid=coin.coinid;
     if(AUTO_BUSY[coinid])continue;
     var timeout=parseInt(getState(coin,7))||0,age=parseInt(coin.age)||0,expired=timeout>0&&age>timeout;
+    // Cooldown: a reveal/resolve takes a few blocks to mine. Don't re-post the same transition
+    // every block — that races competing txns and stalls confirmation. Wait REPOST_AFTER blocks
+    // (coin age advances each block while it stays in this phase) before retrying the same coin.
+    if(AUTO_POSTED[coinid]!==undefined&&(age-AUTO_POSTED[coinid])<REPOST_AFTER)continue;
     // Auto-reveal: house reveals at phase 1
-    if(phase===1&&isMyKey(getState(coin,0))){AUTO_BUSY[coinid]=true;doAutoReveal(coin)}
+    if(phase===1&&isMyKey(getState(coin,0))){AUTO_BUSY[coinid]=true;AUTO_POSTED[coinid]=age;doAutoReveal(coin)}
     // Auto-resolve: player resolves at phase 2
-    if(phase===2&&isMyKey(getState(coin,8))){AUTO_BUSY[coinid]=true;var safeCoinId=coinid.replace(/[^a-fA-F0-9x]/g,'');doPlayerResolve(coinid,'my_status_'+safeCoinId.substring(0,16))}
-    // Auto-collect expired: phase 1 expired + I'm player, or phase 2 expired + I'm house
-    if(expired&&phase===1&&isMyKey(getState(coin,8))){AUTO_BUSY[coinid]=true;autoCollectExpired(coin)}
-    if(expired&&phase===2&&isMyKey(getState(coin,0))){AUTO_BUSY[coinid]=true;autoCollectExpired(coin)}
+    if(phase===2&&isMyKey(getState(coin,8))){AUTO_BUSY[coinid]=true;AUTO_POSTED[coinid]=age;var safeCoinId=coinid.replace(/[^a-fA-F0-9x]/g,'');doPlayerResolve(coinid,'my_status_'+safeCoinId.substring(0,16))}
+    // Expired bets: manual collect only via CLAIM TIMEOUT button
   }
 }
 
