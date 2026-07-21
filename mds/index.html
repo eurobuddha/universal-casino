@@ -719,39 +719,83 @@ function coinIsPayout(c,pr,amt){
   if(pr.winAddr){var ca=c.address||"",cm=c.miniaddress||"";return ca===pr.winAddr||cm===pr.winAddr}
   return true;                                                         // no addr captured: created+value still far safer
 }
+function cnorm(v){return String(v||"").toUpperCase().replace(/^0X/,"")}
+
+// MECHANISM B \u2014 read the taker's RESOLVE transaction, which is self-contained: it carries player_secret in
+// txn.state[13] AND the spent bet coin (inputs[0]) with FULL state incl. house_secret[12]. So EITHER side computes
+// the EXACT result the instant the taker resolves \u2014 no waiting for the payout coin to be spotted, no inversion.
+// Matched by the house commit (state[2], survives every phase). cb({won,profit,result,...}) or cb(null) if the
+// resolve txn isn't in the txpowdb yet. Verified against the Classic node's txpow shape.
+function resolveOutcomeB(pr,cb){
+  var want=cnorm(pr.commit);
+  if(!want){cb(null);return}
+  MDS.cmd("txpow address:"+SCRIPT_ADDR,function(res){
+    if(!res||!res.status||!res.response){cb(null);return}
+    var list=res.response,match=null,inp=null,ps="";
+    for(var i=0;i<list.length;i++){
+      var tp=list[i],txn=(tp&&tp.body&&tp.body.txn)||(tp&&tp.txn)||null;if(!txn)continue;
+      var p=getTxnState(txn,13);if(!p)continue;                          // only resolve txns carry state[13]
+      var ins=txn.inputs||[];if(!ins.length)continue;var in0=ins[0];
+      if(cnorm(in0.address)!==cnorm(SCRIPT_ADDR))continue;
+      if(cnorm(getState(in0,2))!==want)continue;                         // our bet, by commit
+      match=txn;inp=in0;ps=p;break;
+    }
+    if(!match){cb(null);return}
+    var hs=getState(inp,12),range=parseInt(getState(inp,3))||2,payout=parseInt(getState(inp,4))||range;
+    var bet=getState(inp,5)||"0",pick=parseInt(getState(inp,11)),playerAddr=getState(inp,9);
+    MDS.cmd("hash data:"+String(hs)+String(ps).substring(2),function(hres){   // hs keeps 0x, ps drops its 0x
+      var hash=extractResponse(hres)||"";
+      var exact=hash?(parseInt(hash.substring(2,10),16)%range):null;
+      var hashPlayerWins=(exact!=null)?(exact===pick):undefined;
+      var winnings=miniNum(parseFloat(bet)*payout);
+      var paidPlayer=(match.outputs||[]).some(function(o){return cnorm(o.address)===cnorm(playerAddr)&&Math.abs(parseFloat(o.amount)-winnings)<0.001});
+      var playerWins=(hashPlayerWins===undefined)?paidPlayer:hashPlayerWins;
+      if(hashPlayerWins!==undefined&&hashPlayerWins!==paidPlayer)playerWins=paidPlayer;   // outputs = consensus truth
+      var won=(pr.role==='House')?!playerWins:playerWins;
+      var profit=(pr.role==='House')?(won?parseFloat(bet):miniNum(parseFloat(bet)*(payout-1))):(won?miniNum(winnings-parseFloat(bet)):parseFloat(bet));
+      cb({won:won,playerWins:playerWins,result:exact,range:range,payout:payout,bet:bet,profit:profit,pick:pick});
+    });
+  });
+}
+function getTxnState(txn,port){var a=(txn&&txn.state)||[];for(var i=0;i<a.length;i++){if(String(a[i].port)===String(port))return a[i].data}return""}
+
 function resolvePendingResults(){
   if(PENDING_RESULTS.length===0)return;
   loadHistory(function(){   // pick up EXACT results the background service recorded, so they de-dup below
   MDS.cmd("coins relevant:true tokenid:0x00",function(res){
-    if(!res.status||!res.response)return;
-    var walletCoins=res.response.filter(function(c){return!c.state||c.state.length===0});
-    var toRemove=[];
-    PENDING_RESULTS.forEach(function(pr,idx){
-      var age=Date.now()-pr.time;if(age<3000)return;
-      var alreadyRecorded=RESOLVED_BETS.some(function(rb){return rb.coinid===pr.coinid});
-      if(alreadyRecorded){toRemove.push(idx);return}
-      var iWon=false,profit;
-      if(pr.role==='House'){
-        var potAmt=parseFloat(pr.amount);
-        var foundPot=walletCoins.some(function(c){return coinIsPayout(c,pr,potAmt)});
-        iWon=foundPot;profit=iWon?parseFloat(pr.bet):miniNum(parseFloat(pr.bet)*(pr.payout-1));
-      }else{
-        var winAmt=miniNum(parseFloat(pr.bet)*pr.payout);
-        var foundWin=walletCoins.some(function(c){return coinIsPayout(c,pr,winAmt)});
-        iWon=foundWin;profit=iWon?miniNum(winAmt-parseFloat(pr.bet)):parseFloat(pr.bet);
-      }
+    var walletCoins=(res&&res.status&&res.response)?res.response.filter(function(c){return!c.state||c.state.length===0}):[];
+    var snapshot=PENDING_RESULTS.slice(),changed=false;
+    function removePending(pr){var k=PENDING_RESULTS.indexOf(pr);if(k>=0)PENDING_RESULTS.splice(k,1)}
+    function record(pr,iWon,profit,resultIdx){
       var prPickLabel=(pr.pickIdx>=0)?pickLabel(pr.range,pr.pickIdx):'\u2014';
-      RESOLVED_BETS.unshift({coinid:pr.coinid,role:pr.role,game:pr.game,range:pr.range,pickLabel:prPickLabel,resultLabel:'\u2014',profit:profit,won:iWon,bet:pr.bet,amount:pr.amount,txid:pr.coinid,time:pr.time});
+      var rLabel=(resultIdx!=null&&resultIdx>=0)?pickLabel(pr.range,resultIdx):'\u2014';
+      RESOLVED_BETS.unshift({coinid:pr.coinid,role:pr.role,game:pr.game,range:pr.range,pickLabel:prPickLabel,resultLabel:rLabel,profit:profit,won:iWon,bet:pr.bet,amount:pr.amount,txid:pr.coinid,time:pr.time});
       if(RESOLVED_BETS.length>50)RESOLVED_BETS.pop();
       saveHistory();
       var playerWins=(pr.role==='Player')?iWon:!iWon;
-      flashResult(playerWins,pr.role==='House',pr.game,profit,pr.range,pr.pickIdx>=0?pr.pickIdx:-1,-1);
+      flashResult(playerWins,pr.role==='House',pr.game,profit,pr.range,pr.pickIdx>=0?pr.pickIdx:-1,(resultIdx!=null&&resultIdx>=0)?resultIdx:-1);
       var prLogPick=pr.pickIdx>=0?" \u2014 Picked: "+prPickLabel:"";
-      logActivity((iWon?"WON +":"LOST -")+profit+" Minima \u2014 "+pr.game+prLogPick+" (as "+pr.role+")",iWon?"ok":"err");
-      toRemove.push(idx);
-    });
-    toRemove.sort(function(a,b){return b-a}).forEach(function(i){PENDING_RESULTS.splice(i,1)});
-    if(toRemove.length>0)renderHistory();
+      logActivity((iWon?"WON +":"LOST -")+profit+" Minima \u2014 "+pr.game+prLogPick+" (as "+pr.role+")"+(rLabel!=='\u2014'?" \u2014 Result: "+rLabel:""),iWon?"ok":"err");
+      changed=true;removePending(pr);
+    }
+    function fallback(pr){   // no exact result available \u2014 spot the payout coin (win/lose + winnings only)
+      var iWon,profit;
+      if(pr.role==='House'){var potAmt=parseFloat(pr.amount);iWon=walletCoins.some(function(c){return coinIsPayout(c,pr,potAmt)});profit=iWon?parseFloat(pr.bet):miniNum(parseFloat(pr.bet)*(pr.payout-1))}
+      else{var winAmt=miniNum(parseFloat(pr.bet)*pr.payout);iWon=walletCoins.some(function(c){return coinIsPayout(c,pr,winAmt)});profit=iWon?miniNum(winAmt-parseFloat(pr.bet)):parseFloat(pr.bet)}
+      record(pr,iWon,profit,-1);
+    }
+    var i=0;
+    function step(){
+      if(i>=snapshot.length){if(changed)renderHistory();return}
+      var pr=snapshot[i++];
+      if(RESOLVED_BETS.some(function(rb){return rb.coinid===pr.coinid})){removePending(pr);step();return}   // service/taker already recorded it
+      resolveOutcomeB(pr,function(out){   // PRIMARY: exact result from the taker's resolve txn, instantly
+        if(out){record(pr,out.won,out.profit,(out.result!=null?out.result:-1))}
+        else{pr.attempts=(pr.attempts||0)+1;if(pr.attempts>=3)fallback(pr)}   // txpowdb miss \u2192 retry a few blocks then heuristic
+        step();
+      });
+    }
+    step();
   });
   });
 }
@@ -933,7 +977,7 @@ function finishInit(){
   loadWalletKeys(function(){loadHistory(function(){
     DB_READY=true;
     cleanupZombieTxns();
-    MDS.log("ZEC v2.8.6 ready. Script="+SCRIPT_ADDR+" ScriptOK="+SCRIPT_OK+" Keys="+Object.keys(MY_KEYS).length);
+    MDS.log("ZEC v2.8.7 ready. Script="+SCRIPT_ADDR+" ScriptOK="+SCRIPT_OK+" Keys="+Object.keys(MY_KEYS).length);
     logActivity("Casino ready \u2014 "+Object.keys(MY_KEYS).length+" keys loaded","info");
     refreshBets();refreshBalance();updateSummary();
   })});
@@ -1008,12 +1052,12 @@ function refreshBets(){
         if(phase===2&&amHouse&&!amPlayer){
           var range=parseInt(getState(old,3))||2,payout=parseInt(getState(old,4))||2,bet=getState(old,5)||"0";
           var pk2=parseInt(getState(old,11));
-          PENDING_RESULTS.push({coinid:old.coinid,role:'House',range:range,payout:payout,bet:bet,amount:parseFloat(old.amount),game:gameType(range).name,pickIdx:pk2,time:Date.now(),winAddr:getState(old,1),atBlock:CUR_BLOCK});
+          PENDING_RESULTS.push({coinid:old.coinid,role:'House',range:range,payout:payout,bet:bet,amount:parseFloat(old.amount),game:gameType(range).name,pickIdx:pk2,time:Date.now(),winAddr:getState(old,1),atBlock:CUR_BLOCK,commit:getState(old,2),attempts:0});
         }
         if(phase===2&&amPlayer&&!amHouse){
           var rng=parseInt(getState(old,3))||2,bt=getState(old,5)||"0";
           var pk3=parseInt(getState(old,11));
-          PENDING_RESULTS.push({coinid:old.coinid,role:'Player',range:rng,payout:parseInt(getState(old,4))||2,bet:bt,amount:parseFloat(old.amount),game:gameType(rng).name,pickIdx:pk3,time:Date.now(),winAddr:getState(old,9),atBlock:CUR_BLOCK});
+          PENDING_RESULTS.push({coinid:old.coinid,role:'Player',range:rng,payout:parseInt(getState(old,4))||2,bet:bt,amount:parseFloat(old.amount),game:gameType(rng).name,pickIdx:pk3,time:Date.now(),winAddr:getState(old,9),atBlock:CUR_BLOCK,commit:getState(old,2),attempts:0});
         }
       });
     }
