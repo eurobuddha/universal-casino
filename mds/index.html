@@ -603,7 +603,7 @@ var PRESETS={
   roulette:{name:'Roulette',range:36,payout:36,labels:null}
 };
 
-var SCRIPT_ADDR="0xD65ADBBB7AB5032D794B02CF5E8814C720BE3C9562CC6C07081DE41CCA665A6F",MY_PUBKEY="",MY_HEX_ADDR="",MY_ADDR="",MY_KEYS={};
+var SCRIPT_ADDR="0xD65ADBBB7AB5032D794B02CF5E8814C720BE3C9562CC6C07081DE41CCA665A6F",MY_PUBKEY="",MY_HEX_ADDR="",MY_ADDR="",MY_KEYS={},SCRIPT_OK=false;
 var DB_READY=false,BETS=[],SELECTED_PRESET="flip",CARD_PICKS={};
 var PENDING_TXS={},AUTO_BUSY={},TAKING={},PENDING_CREATE=false;
 var AUTO_POSTED={},REPOST_AFTER=8;
@@ -864,6 +864,7 @@ MDS.init(function(msg){
   if(msg.event==="NEWBLOCK"){
     MDS.keypair.set("casino_tab_hb",""+Date.now());   // foreground heartbeat — the service auto-processes only while this is stale
     updateBlock(msg);
+    ensureScript();   // keep retrying registration until confirmed (else reveals/resolves are rejected)
     if(DB_READY){refreshBets();refreshBalance();autoProcess();if(PENDING_RESULTS.length>0)resolvePendingResults()}
     if(Object.keys(PENDING_TXS).length>0)checkPendingComplete();
   }
@@ -872,8 +873,18 @@ MDS.init(function(msg){
   }
 });
 
+// Register the covenant script and VERIFY it took (fire-and-forget silently failed on some nodes →
+// reveals rejected with scripts:0). Retried from the NEWBLOCK handler until confirmed.
+function ensureScript(cb){
+  if(SCRIPT_OK){if(cb)cb();return}
+  MDS.cmd('newscript script:"'+SCRIPT+'" trackall:true',function(res){
+    var addr=(res&&res.response)?(res.response.address||''):'';
+    if(res&&res.status&&addr&&addr.toUpperCase()===SCRIPT_ADDR.toUpperCase())SCRIPT_OK=true;
+    if(cb)cb();
+  });
+}
 function initApp(){
-  MDS.cmd('newscript script:"'+SCRIPT+'"');
+  ensureScript();
   MDS.cmd("block",function(res){if(res.status){CUR_BLOCK=parseInt(res.response.block)||CUR_BLOCK;document.getElementById("blockHeight").innerText="#"+res.response.block}});
   loadIdentity(function(){finishInit()});
   setupUI();
@@ -922,7 +933,7 @@ function finishInit(){
   loadWalletKeys(function(){loadHistory(function(){
     DB_READY=true;
     cleanupZombieTxns();
-    MDS.log("ZEC v2.8.3 ready. Script="+SCRIPT_ADDR+" Keys="+Object.keys(MY_KEYS).length);
+    MDS.log("ZEC v2.8.6 ready. Script="+SCRIPT_ADDR+" ScriptOK="+SCRIPT_OK+" Keys="+Object.keys(MY_KEYS).length);
     logActivity("Casino ready \u2014 "+Object.keys(MY_KEYS).length+" keys loaded","info");
     refreshBets();refreshBalance();updateSummary();
   })});
