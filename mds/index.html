@@ -921,7 +921,7 @@ MDS.init(function(msg){
 // reveals rejected with scripts:0). Retried from the NEWBLOCK handler until confirmed.
 function ensureScript(cb){
   if(SCRIPT_OK){if(cb)cb();return}
-  MDS.cmd('newscript script:"'+SCRIPT+'" trackall:true',function(res){
+  MDS.cmd('newscript script:"'+SCRIPT+'" trackall:false',function(res){
     var addr=(res&&res.response)?(res.response.address||''):'';
     if(res&&res.status&&addr&&addr.toUpperCase()===SCRIPT_ADDR.toUpperCase())SCRIPT_OK=true;
     if(cb)cb();
@@ -977,7 +977,7 @@ function finishInit(){
   loadWalletKeys(function(){loadHistory(function(){
     DB_READY=true;
     cleanupZombieTxns();
-    MDS.log("ZEC v2.8.8 ready. Script="+SCRIPT_ADDR+" ScriptOK="+SCRIPT_OK+" Keys="+Object.keys(MY_KEYS).length);
+    MDS.log("ZEC v2.8.9 ready. Script="+SCRIPT_ADDR+" ScriptOK="+SCRIPT_OK+" Keys="+Object.keys(MY_KEYS).length);
     logActivity("Casino ready \u2014 "+Object.keys(MY_KEYS).length+" keys loaded","info");
     refreshBets();refreshBalance();updateSummary();
   })});
@@ -1040,7 +1040,7 @@ function refreshBalance(){
 
 function refreshBets(){
   if(!SCRIPT_ADDR)return;
-  MDS.cmd("coins address:"+SCRIPT_ADDR,function(res){
+  MDS.cmd("coins address:"+SCRIPT_ADDR+" depth:4096",function(res){
     var newBets=(res.status&&res.response)?res.response:[];
     if(PREV_BETS.length>0){
       var newIds={};newBets.forEach(function(c){newIds[c.coinid]=true});
