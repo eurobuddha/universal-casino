@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Zero Edge Casino</title>
 <script type="text/javascript" src="mds.js"></script>
+<script src="timeout-claims.js"></script>
 <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=Chakra+Petch:wght@400;600;700&family=Share+Tech+Mono&display=swap" rel="stylesheet">
 <style>
 :root{
@@ -139,6 +140,7 @@ body::after{
 .badge--reveal{background:var(--pink-bg);color:var(--pink);border:1px solid rgba(255,45,120,.2)}
 
 /* Buttons */
+#timeoutBanner[hidden]{display:none}
 .btn{
   font-family:var(--pixel);font-size:9px;padding:12px 16px;border:none;
   border-radius:var(--radius);cursor:pointer;letter-spacing:1px;
@@ -419,6 +421,7 @@ body::after{
 
   <div class="log" id="activityLog"></div>
 
+  <button id="timeoutBanner" class="btn btn--ghost btn--full" hidden onclick="switchTab('mybets')"></button>
   <nav class="tabs">
     <button class="tab tab--active" data-view="play">PLAY</button>
     <button class="tab" data-view="house">HOUSE</button>
@@ -956,7 +959,7 @@ function cleanupZombieTxns(){
 
 // ===== MDS INIT =====
 MDS.init(function(msg){
-  if(msg.event==="inited"){initApp();setInterval(function(){MDS.keypair.set("casino_tab_hb",""+Date.now())},5000)}
+  if(msg.event==="inited"){MDS.keypair.get("casino_timeout_open",function(r){if(r&&r.value==="1"){switchTab("mybets");MDS.keypair.set("casino_timeout_open","0");}});initApp();setInterval(function(){MDS.keypair.set("casino_tab_hb",""+Date.now())},5000)}
   if(msg.event==="NEWBLOCK"){
     MDS.keypair.set("casino_tab_hb",""+Date.now());   // foreground heartbeat — the service auto-processes only while this is stale
     updateBlock(msg);
@@ -1019,7 +1022,7 @@ function fetchAndStoreIdentity(callback){
 
 function loadWalletKeys(callback){
   MDS.cmd("keys",function(res){
-    try{if(res&&res.status&&res.response){var list=res.response.keys||res.response;if(Array.isArray(list)){for(var i=0;i<list.length;i++){var pk=list[i].publickey||list[i];if(pk&&typeof pk==='string')MY_KEYS[pk]=true}}}}catch(e){}
+    try{if(res&&res.status&&res.response){var list=Array.isArray(res.response.keys)?res.response.keys:res.response;if(Array.isArray(list)){for(var i=0;i<list.length;i++){var pk=list[i].publickey||list[i];if(pk&&typeof pk==='string')MY_KEYS[pk]=true}}}}catch(e){}
     if(MY_PUBKEY)MY_KEYS[MY_PUBKEY]=true;
     if(callback)callback();
   });
@@ -1097,7 +1100,8 @@ function refreshBalance(){
 function refreshBets(){
   if(!SCRIPT_ADDR)return;
   MDS.cmd("coins address:"+SCRIPT_ADDR+" depth:4096",function(res){
-    var newBets=(res.status&&res.response)?res.response:[];
+    if(!res || !res.status || !Array.isArray(res.response))return;
+    var newBets=res.response;
     if(PREV_BETS.length>0){
       var newIds={};newBets.forEach(function(c){newIds[c.coinid]=true});
       PREV_BETS.forEach(function(old){
@@ -1117,7 +1121,7 @@ function refreshBets(){
         }
       });
     }
-    PREV_BETS=newBets.map(function(c){return{coinid:c.coinid,amount:c.amount,state:c.state,age:c.age}});
+    PREV_BETS=newBets.map(function(c){return{coinid:c.coinid,amount:c.amount,tokenid:c.tokenid,tokenamount:c.tokenamount,state:c.state,age:c.age}});
     BETS=newBets;
     Object.keys(AUTO_BUSY).forEach(function(id){var found=false;BETS.forEach(function(c){if(c.coinid===id)found=true});if(!found)delete AUTO_BUSY[id]});
     Object.keys(AUTO_POSTED).forEach(function(id){var found=false;BETS.forEach(function(c){if(c.coinid===id)found=true});if(!found)delete AUTO_POSTED[id]});
@@ -1200,7 +1204,10 @@ function renderOpenBets(){
 // ===== Render My Bets =====
 function renderMyBets(){
   var el=document.getElementById("myBetsList");
-  var mine=BETS.filter(function(c){return (isMyKey(getState(c,0))||isMyKey(getState(c,8)))&&tokIsActive(coinTok(c))});
+  var mine=BETS.filter(function(c){return isMyKey(getState(c,0))||isMyKey(getState(c,8))});
+  var claims=CasinoTimeouts.snapshot(BETS,isMyKey),banner=document.getElementById("timeoutBanner");
+  banner.hidden=!claims.ids.length;
+  banner.innerText=claims.summary+" — Open My Bets";
   var tabEl=document.querySelector('[data-view="mybets"]');
   if(tabEl)tabEl.innerText="MY BETS"+(mine.length?" ("+mine.length+")":"");
   var hasPendingTakes=Object.keys(TAKING).length>0;
@@ -1210,17 +1217,17 @@ function renderMyBets(){
   mine.forEach(function(coin){
     var phase=parseInt(getState(coin,6))||0,range=parseInt(getState(coin,3))||2,payout=parseInt(getState(coin,4))||2,bet=getState(coin,5)||"0";
     var gt=gameType(range),isHouse=isMyKey(getState(coin,0)),isPlayer=isMyKey(getState(coin,8));
-    var timeout=parseInt(getState(coin,7))||0,age=parseInt(coin.age)||0,pastDeadline=timeout>0&&age>timeout;
+    var timeout=CasinoTimeouts.timeout(coin),age=CasinoTimeouts.age(coin),pastDeadline=CasinoTimeouts.expired(coin),canClaim=CasinoTimeouts.canClaim(coin,isMyKey);
     var safeCoinId=coin.coinid.replace(/[^a-fA-F0-9x]/g,''),statusId='my_status_'+safeCoinId.substring(0,16);
     var phBadge=phase===0?'badge--open':phase===1?'badge--taken':'badge--reveal';
     var phLabel=phase===0?'OPEN':phase===1?'TAKEN':'REVEALED';
     var waitingClass=(phase>=1)?' card--waiting':'';
     html+='<div class="card'+waitingClass+'">';
-    html+='<div class="card-row"><span class="badge '+gt.badge+'">'+esc(gt.name).toUpperCase()+'</span><span class="badge '+phBadge+'">'+phLabel+'</span></div>';
+    html+='<div class="card-row"><span class="badge '+gt.badge+'">'+esc(gt.name).toUpperCase()+' · '+nameForTok(coinTok(coin))+'</span><span class="badge '+phBadge+'">'+phLabel+'</span></div>';
     html+='<div class="card-row"><span class="info">Role: <b>'+(isHouse?'House':'Player')+'</b></span><span class="info">Pot: <b>'+fmtAmt(coinAmount(coin),coinTok(coin))+suffixForTok(coinTok(coin))+'</b></span></div>';
     html+='<div class="card-row"><span class="info">Bet: <b>'+esc(bet)+suffixForTok(coinTok(coin))+'</b> | Odds: <b>'+(payout-1)+':1</b></span></div>';
     if(phase>=1)html+='<div class="card-row"><span class="info">Pick: <b>'+esc(pickLabel(range,getState(coin,11)))+'</b></span></div>';
-    if(timeout>0){var left=timeout-age;html+='<div class="card-row"><span class="info">Timeout: <b>'+(left>0?left+' blocks':'EXPIRED')+'</b></span></div>'}
+    if(phase>=1){var left=timeout+1-age;html+='<div class="card-row"><span class="info">Timeout: <b>'+(age<0?'Waiting for block age':pastDeadline?(canClaim?'Claim available':'Counterparty can claim'):left+' blocks')+'</b></span></div>'}
     if(range==2&&phase>=1)html+=coinAnimHTML();
     if(range==6&&phase>=1)html+=diceAnimHTML();
     if(range==36&&phase>=1)html+=rouletteAnimHTML();
@@ -1228,10 +1235,10 @@ function renderMyBets(){
     if(phase===0&&isHouse)html+='<button class="btn btn--ghost btn--sm" onclick="cancelBet(\''+safeCoinId+'\',\''+statusId+'\',this)">CANCEL</button>';
     if(phase===1&&isHouse)html+='<span class="info" style="color:var(--warn)">Revealing secret on next block...</span>';
     if(phase===1&&isPlayer)html+='<span class="info">Waiting for house to reveal...</span>';
-    if(phase===1&&isPlayer&&pastDeadline)html+='<button class="btn btn--red btn--sm" onclick="claimTimeout(\''+safeCoinId+'\',\''+statusId+'\',this)">CLAIM TIMEOUT</button>';
+    if(phase===1&&canClaim)html+='<button class="btn btn--red btn--sm" onclick="claimTimeout(\''+safeCoinId+'\',\''+statusId+'\',this)">CLAIM TIMEOUT</button>';
     if(phase===2&&isPlayer)html+='<span class="info" style="color:var(--green)">Resolving result...</span>';
     if(phase===2&&isHouse)html+='<span class="info">Waiting for player to resolve...</span>';
-    if(phase===2&&isHouse&&pastDeadline)html+='<button class="btn btn--red btn--sm" onclick="claimTimeout(\''+safeCoinId+'\',\''+statusId+'\',this)">CLAIM TIMEOUT</button>';
+    if(phase===2&&canClaim)html+='<button class="btn btn--red btn--sm" onclick="claimTimeout(\''+safeCoinId+'\',\''+statusId+'\',this)">CLAIM TIMEOUT</button>';
     html+='</div><div class="bet-status" id="'+statusId+'"></div></div>';
   });
   el.innerHTML=html;renderHistory();
@@ -1467,6 +1474,7 @@ function doPlayerResolve(coinid,statusId,btnEl){
 // ===== Claim Timeout =====
 function claimTimeout(coinid,statusId,btnEl){
   var coin=BETS.find(function(c){return c.coinid===coinid});if(!coin)return;
+  if(!CasinoTimeouts.canClaim(coin,isMyKey)){showErr(document.getElementById(statusId),"No timeout claim available for this wallet");return;}
   if(btnEl)btnEl.classList.add("btn--disabled");
   var phase=parseInt(getState(coin,6))||0;
   var signKey=phase===1?getState(coin,8):getState(coin,0);
