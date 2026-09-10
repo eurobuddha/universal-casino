@@ -6,6 +6,7 @@
 <title>Zero Edge Casino</title>
 <script type="text/javascript" src="mds.js"></script>
 <script src="timeout-claims.js"></script>
+<script src="offer-keepalive.js"></script>
 <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=Chakra+Petch:wght@400;600;700&family=Share+Tech+Mono&display=swap" rel="stylesheet">
 <style>
 :root{
@@ -1277,6 +1278,14 @@ function createBet(){
 
 // ===== Cancel Bet =====
 function cancelBet(coinid,statusId,btnEl){
+  var coin=BETS.find(function(c){return c.coinid===coinid});if(!coin)return;
+  if(getState(coin,6)!=='0'||!isMyKey(getState(coin,0)))return;
+  CasinoOffers.requestCancel(MDS,coin,function(err){
+    if(err){showErr(document.getElementById(statusId),err);return;}
+    cancelBetNow(coinid,statusId,btnEl);
+  });
+}
+function cancelBetNow(coinid,statusId,btnEl){
   var coin=BETS.find(function(c){return c.coinid===coinid});if(!coin)return;
   if(btnEl)btnEl.classList.add("btn--disabled");
   var txid="cancel_"+Date.now(),statusEl=document.getElementById(statusId);
